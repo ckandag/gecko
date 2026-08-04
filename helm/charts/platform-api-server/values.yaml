@@ -110,6 +110,13 @@ esp:
   port: 9080
   serviceName: ""
 
+# Cloud Armor security policy binding.
+# The ComputeSecurityPolicy resource is managed separately (infra repo).
+# This only creates the GCPBackendPolicy that references it by name.
+cloudArmor:
+  enabled: false
+  policyName: ""
+
 alloydb:
   enabled: false
   projectId: ""

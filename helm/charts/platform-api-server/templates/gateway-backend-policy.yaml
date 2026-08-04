@@ -1,0 +1,18 @@
+{{- if and .Values.gateway.enabled .Values.cloudArmor.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}-backend-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway-backend-policy
+spec:
+  default:
+    securityPolicy: {{ required "cloudArmor.policyName is required when cloudArmor is enabled" .Values.cloudArmor.policyName }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ .Values.gateway.service.name }}
+{{- end }}
