@@ -1,4 +1,4 @@
-{{- if and .Values.gateway.enabled .Values.cloudArmor.enabled }}
+{{- if and .Values.gateway.enabled .Values.gateway.cloudArmor.enabled }}
 ---
 apiVersion: networking.gke.io/v1
 kind: GCPBackendPolicy
@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: gateway-backend-policy
 spec:
   default:
-    securityPolicy: {{ required "cloudArmor.policyName is required when cloudArmor is enabled" .Values.cloudArmor.policyName }}
+    securityPolicy: {{ required "gateway.cloudArmor.policyName is required when cloudArmor is enabled" .Values.gateway.cloudArmor.policyName }}
   targetRef:
     group: ""
     kind: Service
