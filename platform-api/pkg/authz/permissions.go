@@ -9,26 +9,29 @@ import (
 type Action string
 
 const (
-	CreateCluster     Action = "CreateCluster"
-	ListClusters      Action = "ListClusters"
-	GetCluster        Action = "GetCluster"
-	UpdateCluster     Action = "UpdateCluster"
-	DeleteCluster     Action = "DeleteCluster"
-	CreateNodepool    Action = "CreateNodepool"
-	ListNodepools     Action = "ListNodepools"
-	GetNodepool       Action = "GetNodepool"
-	UpdateNodepool    Action = "UpdateNodepool"
-	DeleteNodepool    Action = "DeleteNodepool"
-	CreateRoleBinding Action = "CreateRoleBinding"
-	ListRoleBindings  Action = "ListRoleBindings"
-	GetRoleBinding    Action = "GetRoleBinding"
-	UpdateRoleBinding Action = "UpdateRoleBinding"
-	DeleteRoleBinding Action = "DeleteRoleBinding"
-	CreateRole        Action = "CreateRole"
-	ListRoles         Action = "ListRoles"
-	GetRole           Action = "GetRole"
-	UpdateRole        Action = "UpdateRole"
-	DeleteRole        Action = "DeleteRole"
+	CreateCluster                    Action = "CreateCluster"
+	ListClusters                     Action = "ListClusters"
+	GetCluster                       Action = "GetCluster"
+	UpdateCluster                    Action = "UpdateCluster"
+	DeleteCluster                    Action = "DeleteCluster"
+	CreateNodepool                   Action = "CreateNodepool"
+	ListNodepools                    Action = "ListNodepools"
+	GetNodepool                      Action = "GetNodepool"
+	UpdateNodepool                   Action = "UpdateNodepool"
+	DeleteNodepool                   Action = "DeleteNodepool"
+	CreateRoleBinding                Action = "CreateRoleBinding"
+	ListRoleBindings                 Action = "ListRoleBindings"
+	GetRoleBinding                   Action = "GetRoleBinding"
+	UpdateRoleBinding                Action = "UpdateRoleBinding"
+	DeleteRoleBinding                Action = "DeleteRoleBinding"
+	CreateRole                       Action = "CreateRole"
+	ListRoles                        Action = "ListRoles"
+	GetRole                          Action = "GetRole"
+	UpdateRole                       Action = "UpdateRole"
+	DeleteRole                       Action = "DeleteRole"
+	CreateControlPlaneUpgradeRequest Action = "CreateControlPlaneUpgradeRequest"
+	ListControlPlaneUpgradeRequests  Action = "ListControlPlaneUpgradeRequests"
+	GetControlPlaneUpgradeRequest    Action = "GetControlPlaneUpgradeRequest"
 )
 
 var permissionActions = map[string]Action{
@@ -52,6 +55,10 @@ var permissionActions = map[string]Action{
 	"role.get":           GetRole,
 	"role.update":        UpdateRole,
 	"role.delete":        DeleteRole,
+
+	"controlplaneupgraderequest.create": CreateControlPlaneUpgradeRequest,
+	"controlplaneupgraderequest.list":   ListControlPlaneUpgradeRequests,
+	"controlplaneupgraderequest.get":    GetControlPlaneUpgradeRequest,
 }
 
 func actionForPermission(permission string) (Action, bool) {
@@ -100,6 +107,8 @@ func pluralToResource(plural string) string {
 		return "cluster"
 	case "nodepools":
 		return "nodepool"
+	case "controlplaneupgraderequests":
+		return "controlplaneupgraderequest"
 	case "roles":
 		return "role"
 	case "rolebindings":

@@ -1,0 +1,52 @@
+properties:
+  apiVersion:
+    description: |-
+      APIVersion defines the versioned schema of this representation of an object.
+      Servers should convert recognized schemas to the latest internal value, and
+      may reject unrecognized values.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    type: string
+  kind:
+    description: |-
+      Kind is a string value representing the REST resource this object represents.
+      Servers may infer this from the endpoint the client submits requests to.
+      Cannot be updated.
+      In CamelCase.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    type: string
+  metadata:
+    type: object
+  spec:
+    description: ControlPlaneUpgradeRequestSpec identifies the Cluster and selected
+      target.
+    properties:
+      clusterID:
+        minLength: 1
+        type: string
+      targetVersion:
+        maxLength: 63
+        minLength: 1
+        type: string
+    required:
+    - clusterID
+    - targetVersion
+    type: object
+  status:
+    description: |-
+      ControlPlaneUpgradeRequestStatus records the controller's decision on this
+      request. Rollout progress remains on Cluster.status.controlPlaneUpgrade.
+    properties:
+      decidedAt:
+        format: date-time
+        type: string
+      decision:
+        enum:
+        - Accepted
+        - Rejected
+        type: string
+      reason:
+        type: string
+    type: object
+required:
+- spec
+type: object

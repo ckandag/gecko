@@ -6,8 +6,20 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+type storedParentStore struct {
+	storage.ResourceStore
+	parent client.Object
+}
+
+func (s storedParentStore) Get(context.Context, string, string) (client.Object, error) {
+	return s.parent, nil
+}
 
 func TestParentFilter_ContextRoundTrip(t *testing.T) {
 	ctx := context.Background()
@@ -92,6 +104,27 @@ func TestValidateParentOnCreate(t *testing.T) {
 			t.Fatalf("expected no error without parent filter, got %v", err)
 		}
 	})
+}
+
+func TestGetParentOnCreate(t *testing.T) {
+	parent := &unstructured.Unstructured{}
+	parent.SetName("c1")
+	parent.SetNamespace("default")
+	store := storedParentStore{parent: parent}
+	objMap := map[string]interface{}{"spec": map[string]interface{}{"clusterID": "c1"}}
+
+	got, err := GetParentOnCreate(t.Context(), store, "default", "spec.clusterID", objMap)
+	if err != nil || got != parent {
+		t.Fatalf("GetParentOnCreate() = %v, %v; want parent", got, err)
+	}
+
+	deleting := parent.DeepCopy()
+	now := metav1.Now()
+	deleting.SetDeletionTimestamp(&now)
+	_, err = GetParentOnCreate(t.Context(), storedParentStore{parent: deleting}, "default", "spec.clusterID", objMap)
+	if err == nil {
+		t.Fatal("expected error for deleting parent")
+	}
 }
 
 func TestValidateParentOwnership(t *testing.T) {

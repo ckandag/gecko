@@ -17,6 +17,10 @@ var (
 	//go:embed .schemas/cluster_schema.yaml
 	ClusterSchemaYAML string
 
+	// ControlPlaneUpgradeRequestSchemaYAML contains the OpenAPI v3 schema for ControlPlaneUpgradeRequest.
+	//go:embed .schemas/controlplaneupgraderequest_schema.yaml
+	ControlPlaneUpgradeRequestSchemaYAML string
+
 	// NodePoolSchemaYAML contains the OpenAPI v3 schema for NodePool.
 	//go:embed .schemas/nodepool_schema.yaml
 	NodePoolSchemaYAML string
@@ -71,6 +75,17 @@ var ClusterResourceInfo = types.ResourceInfo{
 			JSONPath:    ".metadata.creationTimestamp",
 		},
 	},
+}
+
+// ControlPlaneUpgradeRequestResourceInfo describes the ControlPlaneUpgradeRequest resource type.
+var ControlPlaneUpgradeRequestResourceInfo = types.ResourceInfo{
+	GVK:        GroupVersion.WithKind("ControlPlaneUpgradeRequest"),
+	Plural:     "controlplaneupgraderequests",
+	Singular:   "controlplaneupgraderequest",
+	Namespaced: true,
+	SchemaYAML: ControlPlaneUpgradeRequestSchemaYAML,
+	// Generated from // +orlop:public-verbs annotation.
+	Verbs: []string{"create", "get", "list"},
 }
 
 // NodePoolResourceInfo describes the NodePool resource type.
@@ -154,6 +169,7 @@ func GetResourceInfos() []types.ResourceInfo {
 	return []types.ResourceInfo{
 		ChannelResourceInfo,
 		ClusterResourceInfo,
+		ControlPlaneUpgradeRequestResourceInfo,
 		NodePoolResourceInfo,
 		PlatformRoleResourceInfo,
 		RoleBindingResourceInfo,

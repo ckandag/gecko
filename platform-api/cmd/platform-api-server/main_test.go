@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 )
 
 type fakeBooleanFeatureFlagEvaluator struct {
@@ -150,5 +152,30 @@ func TestValidatePublicAuthAddress(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestControlPlaneUpgradeRequestResourceRegistration(t *testing.T) {
+	for _, resources := range [][]types.ResourceInfo{getPrivateResources(), getPublicResources()} {
+		found := false
+		for _, resource := range resources {
+			if resource.GVK.Kind != "ControlPlaneUpgradeRequest" {
+				continue
+			}
+			found = true
+			if resource.ParentResource == nil || resource.ParentResource.IDField != "spec.clusterID" || resource.ParentResource.Plural != "clusters" {
+				t.Fatalf("unexpected parent registration: %+v", resource.ParentResource)
+			}
+		}
+		if !found {
+			t.Fatal("ControlPlaneUpgradeRequest not registered")
+		}
+	}
+	for _, resource := range getPublicResources() {
+		if resource.GVK.Kind == "ControlPlaneUpgradeRequest" {
+			if got := strings.Join(resource.Verbs, ","); got != "create,get,list" {
+				t.Fatalf("public verbs = %q, want create,get,list", got)
+			}
+		}
 	}
 }
