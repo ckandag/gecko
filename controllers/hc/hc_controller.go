@@ -3,8 +3,10 @@ package hc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
@@ -199,7 +201,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Write status conditions — only update if something changed.
-	if r.applyStatusConditions(&cluster, mwStatus) {
+	statusChanged, err := r.applyStatusConditions(&cluster, mwStatus)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
+	}
+	if statusChanged {
 		if err := r.client.Status().Update(ctx, &cluster); err != nil {
 			if apierrors.IsConflict(err) {
 				return reconcile.Result{}, nil
@@ -346,7 +352,7 @@ func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, me
 
 // applyStatusConditions derives conditions from the resource status and writes them to the cluster.
 // Returns true if any condition changed.
-func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.Status) bool {
+func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.Status) (bool, error) {
 	gen := cluster.Generation
 
 	if mwStatus == nil {
@@ -371,7 +377,7 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
-		return a || b || c
+		return a || b || c, nil
 	}
 
 	// Derive ResourcesApplied from top-level conditions.
@@ -385,19 +391,18 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	}
 	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
 		clusterNS, safeName)
+	hcFeedback := mwStatus.ResourceStatuses[hcKey]
+	// The map key can be present but empty: extractResourceStatuses inserts an empty
+	// map when the HostedCluster's live content has not synced yet (KubeContent nil),
+	// which is a different condition than the "read status document never arrived"
+	// case mwStatus.Stale already covers. Treat an empty map the same as no feedback —
+	// key presence alone is not proof this is fresh data. extractHCFields always sets
+	// at least availableVersions and versionConditions when it actually runs, so a
+	// non-empty map reliably means live content was read.
+	hasHCFeedback := len(hcFeedback) > 0
 	availableStatus := string(metav1.ConditionFalse)
-	apiEndpoint := ""
-	version := ""
-	if hcFeedback, ok := mwStatus.ResourceStatuses[hcKey]; ok {
-		if v, ok := hcFeedback["availableCondition"]; ok {
-			availableStatus = v
-		}
-		if v, ok := hcFeedback["controlPlaneEndpoint"]; ok {
-			apiEndpoint = v
-		}
-		if v, ok := hcFeedback["version"]; ok {
-			version = v
-		}
+	if v, ok := hcFeedback["availableCondition"]; ok {
+		availableStatus = v
 	}
 
 	// Derive ApiCertificateReady from Certificate resource status.
@@ -442,22 +447,117 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		ObservedGeneration: gen,
 	})
 
-	// Write HostedClusterResult when either field is non-empty.
+	// HostedClusterResult (including the observed HyperShift/CVO conditions) is only
+	// touched once something has been observed at least once. Before that, there is
+	// nothing meaningful to report and the field stays nil.
 	c := false
-	if apiEndpoint != "" || version != "" {
-		desired := &privatev1.HostedClusterResult{
-			APIEndpoint: apiEndpoint,
-			Version:     version,
-		}
-		if cluster.Status.HostedClusterResult == nil ||
-			cluster.Status.HostedClusterResult.APIEndpoint != desired.APIEndpoint ||
-			cluster.Status.HostedClusterResult.Version != desired.Version {
-			cluster.Status.HostedClusterResult = desired
-			c = true
+	if hasHCFeedback || cluster.Status.HostedClusterResult != nil {
+		var err error
+		c, err = r.applyHostedClusterResult(cluster, hasHCFeedback, hcFeedback, gen)
+		if err != nil {
+			return false, fmt.Errorf("%s: apply hosted cluster result: %w", adapterName, err)
 		}
 	}
 
-	return a || b || c || d
+	return a || b || c || d, nil
+}
+
+// applyHostedClusterResult writes HC-owned HostedCluster feedback to
+// cluster.Status.HostedClusterResult. It owns parsing hcFeedback end to end,
+// including the fresh-vs-sticky decision for each field:
+//
+// APIEndpoint, Version, DesiredVersion, and AvailableUpdates are sticky: when
+// hasHCFeedback is false they retain their previous value instead of resetting,
+// because currentVersion/targetVersion must not change while feedback is
+// momentarily unavailable (e.g. a transient transport read).
+//
+// ObservedConditions is different: it is a verbatim mirror of whatever
+// HostedCluster feedback reported this reconcile (only "Degraded" is renamed to
+// "HostedClusterDegraded" to avoid colliding with a future Gecko-native condition
+// of the same short name). It does not carry forward previous values and does not
+// synthesize placeholder entries for types HostedCluster did not report — the
+// hc-controller does not hardcode which condition types matter, that is decided by
+// whichever controller reads ObservedConditions. A consumer that needs a specific
+// type and finds it absent here must treat that as Unknown itself, exactly as it
+// would if the type were present with Status=Unknown; either way, health/readiness
+// signals must never be trusted once feedback stops arriving, even though the
+// version fields above stay sticky.
+//
+// ObservedConditions is private HC feedback and is intentionally not exposed on the
+// public API; it is the only place the hc-controller writes raw HyperShift/CVO
+// conditions, including their original LastTransitionTime, which callers may use to
+// tell a fresh signal apart from one that has persisted for a while. See
+// ControlPlaneUpgradeResult for the customer-facing upgrade conditions the
+// control-plane-upgrade controller derives from this data.
+//
+// Returns true if HostedClusterResult changed.
+func (r *Reconciler) applyHostedClusterResult(
+	cluster *privatev1.Cluster,
+	hasHCFeedback bool,
+	hcFeedback map[string]string,
+	gen int64,
+) (bool, error) {
+	previous := cluster.Status.HostedClusterResult
+
+	var apiEndpoint, version, desiredVersion string
+	var availableUpdates []string
+	var observed []metav1.Condition
+
+	switch {
+	case hasHCFeedback:
+		apiEndpoint = hcFeedback["controlPlaneEndpoint"]
+		version = hcFeedback["version"]
+		desiredVersion = hcFeedback["desiredVersion"]
+		if v, ok := hcFeedback["availableVersions"]; ok {
+			if err := json.Unmarshal([]byte(v), &availableUpdates); err != nil {
+				return false, fmt.Errorf("decode available updates: %w", err)
+			}
+		}
+		var versionConditions []metav1.Condition
+		if v, ok := hcFeedback["versionConditions"]; ok {
+			if err := json.Unmarshal([]byte(v), &versionConditions); err != nil {
+				return false, fmt.Errorf("decode version conditions: %w", err)
+			}
+		}
+		observed = make([]metav1.Condition, 0, len(versionConditions))
+		for _, condition := range versionConditions {
+			if condition.Type == "Degraded" {
+				condition.Type = "HostedClusterDegraded"
+			}
+			condition.ObservedGeneration = gen
+			observed = append(observed, condition)
+		}
+	case previous != nil:
+		// No fresh feedback this reconcile — identity fields stay sticky, but
+		// ObservedConditions is deliberately left empty rather than carried
+		// forward: we cannot currently confirm any of it.
+		apiEndpoint = previous.APIEndpoint
+		version = previous.Version
+		desiredVersion = previous.DesiredVersion
+		availableUpdates = previous.AvailableUpdates
+	}
+	// Empty slices are omitted from the stored status and read back as nil. Keep
+	// the desired value canonical so identical empty feedback does not trigger a
+	// status write on every reconciliation.
+	if len(availableUpdates) == 0 {
+		availableUpdates = nil
+	}
+	if len(observed) == 0 {
+		observed = nil
+	}
+
+	desired := &privatev1.HostedClusterResult{
+		APIEndpoint:        apiEndpoint,
+		Version:            version,
+		DesiredVersion:     desiredVersion,
+		AvailableUpdates:   availableUpdates,
+		ObservedConditions: observed,
+	}
+	if reflect.DeepEqual(previous, desired) {
+		return false, nil
+	}
+	cluster.Status.HostedClusterResult = desired
+	return true, nil
 }
 
 // firstCondition returns the status, reason, and message of the first condition matching condType.

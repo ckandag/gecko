@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestControlPlaneUpgradePolicyPermissionsAreValid(t *testing.T) {
+	permissions := []string{
+		"controlplaneupgradepolicy.create",
+		"controlplaneupgradepolicy.list",
+		"controlplaneupgradepolicy.get",
+		"controlplaneupgradepolicy.update",
+		"controlplaneupgradepolicy.delete",
+	}
+
+	for _, permission := range permissions {
+		if !IsValidAuthorizationPermission(permission) {
+			t.Errorf("permission %q is not valid", permission)
+		}
+	}
+}
+
 func TestRoleBindingConditionValidation(t *testing.T) {
 	validCondition := `context.resourcePlural == "clusters" && context.spec.platform.gcp.region == "us-east1"`
 	invalidSyntax := `context.spec.platform.gcp.region ==`

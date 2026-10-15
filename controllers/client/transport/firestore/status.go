@@ -81,7 +81,8 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 
 // extractResourceStatuses parses ReadDesire status documents and returns
 // per-resource status fields keyed by resource identity string.
-// For HostedCluster resources it extracts: availableCondition, controlPlaneEndpoint, version.
+// For HostedCluster resources it extracts: availableCondition, controlPlaneEndpoint,
+// version, desiredVersion, availableVersions, and versionConditions.
 // For NodePool resources it extracts: readyCondition, allNodesHealthyCondition.
 // For Certificate resources it extracts: readyCondition.
 // Other resources: empty inner map (no known fields to extract).
@@ -119,19 +120,25 @@ func extractResourceStatuses(reads []kubeapplier.ReadDesire) (map[string]map[str
 //   - availableCondition: .status.conditions[type=Available].status
 //   - controlPlaneEndpoint: .status.controlPlaneEndpoint.host
 //   - version: first .status.version.history[].version where state == "Completed"
+//   - desiredVersion: .status.version.desired.version
+//   - availableVersions: JSON-encoded .status.version.availableUpdates[].version
+//   - versionConditions: JSON-encoded upgrade-related HostedCluster conditions
 func extractHCFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 
 	var obj struct {
 		Status struct {
-			Conditions []struct {
-				Type   string `json:"type"`
-				Status string `json:"status"`
-			} `json:"conditions"`
+			Conditions           []metav1.Condition `json:"conditions"`
 			ControlPlaneEndpoint struct {
 				Host string `json:"host"`
 			} `json:"controlPlaneEndpoint"`
 			Version struct {
+				Desired struct {
+					Version string `json:"version"`
+				} `json:"desired"`
+				AvailableUpdates []struct {
+					Version string `json:"version"`
+				} `json:"availableUpdates"`
 				History []struct {
 					Version string `json:"version"`
 					State   string `json:"state"`
@@ -145,7 +152,7 @@ func extractHCFields(raw []byte) (map[string]string, error) {
 
 	for _, c := range obj.Status.Conditions {
 		if c.Type == "Available" {
-			fields["availableCondition"] = c.Status
+			fields["availableCondition"] = string(c.Status)
 			break
 		}
 	}
@@ -153,6 +160,35 @@ func extractHCFields(raw []byte) (map[string]string, error) {
 	if host := obj.Status.ControlPlaneEndpoint.Host; host != "" {
 		fields["controlPlaneEndpoint"] = host
 	}
+	if desired := obj.Status.Version.Desired.Version; desired != "" {
+		fields["desiredVersion"] = desired
+	}
+
+	availableVersions := make([]string, 0, len(obj.Status.Version.AvailableUpdates))
+	for _, update := range obj.Status.Version.AvailableUpdates {
+		if update.Version != "" {
+			availableVersions = append(availableVersions, update.Version)
+		}
+	}
+	availableJSON, err := json.Marshal(availableVersions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal HostedCluster available versions: %w", err)
+	}
+	fields["availableVersions"] = string(availableJSON)
+
+	versionConditions := make([]metav1.Condition, 0)
+	for _, condition := range obj.Status.Conditions {
+		switch condition.Type {
+		case "ClusterVersionUpgradeable", "ClusterVersionProgressing", "ClusterVersionAvailable",
+			"ClusterVersionReleaseAccepted", "ClusterVersionSucceeding", "Degraded":
+			versionConditions = append(versionConditions, condition)
+		}
+	}
+	conditionsJSON, err := json.Marshal(versionConditions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal HostedCluster version conditions: %w", err)
+	}
+	fields["versionConditions"] = string(conditionsJSON)
 
 	for _, h := range obj.Status.Version.History {
 		if h.State == "Completed" {

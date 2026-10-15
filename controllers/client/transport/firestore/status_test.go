@@ -87,10 +87,16 @@ func TestExtractResourceStatuses_HostedCluster(t *testing.T) {
 		"status": map[string]any{
 			"conditions": []any{
 				map[string]any{"type": "Available", "status": "True"},
-				map[string]any{"type": "Degraded", "status": "False"},
+				map[string]any{"type": "Degraded", "status": "False", "reason": "AsExpected"},
+				map[string]any{"type": "ClusterVersionUpgradeable", "status": "True", "reason": "AsExpected"},
 			},
 			"controlPlaneEndpoint": map[string]any{"host": "api.example.com"},
 			"version": map[string]any{
+				"desired": map[string]any{"version": "4.14.1"},
+				"availableUpdates": []any{
+					map[string]any{"version": "4.14.1"},
+					map[string]any{"version": "4.15.0"},
+				},
 				"history": []any{
 					map[string]any{"version": "4.14.0", "state": "Completed"},
 				},
@@ -112,6 +118,15 @@ func TestExtractResourceStatuses_HostedCluster(t *testing.T) {
 	assert.Equal(t, "True", statuses[key]["availableCondition"])
 	assert.Equal(t, "api.example.com", statuses[key]["controlPlaneEndpoint"])
 	assert.Equal(t, "4.14.0", statuses[key]["version"])
+	assert.Equal(t, "4.14.1", statuses[key]["desiredVersion"])
+	assert.JSONEq(t, `["4.14.1","4.15.0"]`, statuses[key]["availableVersions"])
+	var versionConditions []metav1.Condition
+	require.NoError(t, json.Unmarshal([]byte(statuses[key]["versionConditions"]), &versionConditions))
+	require.Len(t, versionConditions, 2)
+	assert.Equal(t, "Degraded", versionConditions[0].Type)
+	assert.Equal(t, metav1.ConditionFalse, versionConditions[0].Status)
+	assert.Equal(t, "ClusterVersionUpgradeable", versionConditions[1].Type)
+	assert.Equal(t, metav1.ConditionTrue, versionConditions[1].Status)
 }
 
 func TestExtractResourceStatuses_HostedCluster_PartialVersionSkipped(t *testing.T) {

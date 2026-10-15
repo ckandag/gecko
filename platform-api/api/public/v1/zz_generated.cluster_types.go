@@ -525,6 +525,11 @@ type ClusterStatus struct {
 
 	// +optional
 	HostedClusterResult *HostedClusterResult `json:"hostedClusterResult,omitempty"`
+
+	// ControlPlaneUpgrade is written by the control-plane-upgrade controller.
+
+	// +optional
+	ControlPlaneUpgrade *ControlPlaneUpgradeResult `json:"controlPlaneUpgrade,omitempty"`
 }
 
 // HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.
@@ -536,6 +541,42 @@ type HostedClusterResult struct {
 
 	// +optional
 	Version string `json:"version,omitempty"`
+}
+
+// ControlPlaneUpgradeResult holds the control-plane-upgrade controller's decision
+// state. This field is read-only — populated by the control-plane-upgrade
+// controller only. The controller reads HostedClusterResult for feedback but
+// never writes it.
+type ControlPlaneUpgradeResult struct {
+	// TargetVersion is the control-plane version currently selected or requested.
+
+	// +optional
+	TargetVersion string `json:"targetVersion,omitempty"`
+	// TargetSource records whether TargetVersion was selected automatically or
+	// requested by the customer.
+
+	// +optional
+	// +kubebuilder:validation:Enum=automatic;customer
+	TargetSource string `json:"targetSource,omitempty"`
+	// RequestedAt is when the control-plane-upgrade controller selected or
+	// requested TargetVersion. It does not indicate that HyperShift has
+	// accepted or begun rolling it out; ControlPlaneUpgradeProgressing reports
+	// that separately.
+
+	// +optional
+	RequestedAt *metav1.Time `json:"requestedAt,omitempty"`
+	// CompletedAt is when TargetVersion completed successfully.
+
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+	// FailureReason is set when the upgrade to TargetVersion failed or stalled.
+
+	// +optional
+	FailureReason string `json:"failureReason,omitempty"`
+	// FailureMessage is set when the upgrade to TargetVersion failed or stalled.
+
+	// +optional
+	FailureMessage string `json:"failureMessage,omitempty"`
 }
 
 func init() { register(&Cluster{}, &ClusterList{}) }

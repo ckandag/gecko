@@ -390,6 +390,31 @@ properties:
         x-kubernetes-list-map-keys:
         - type
         x-kubernetes-list-type: map
+      controlPlaneUpgrade:
+        description: |-
+          ControlPlaneUpgradeResult holds the control-plane-upgrade controller's decision
+          state. This field is read-only — populated by the control-plane-upgrade
+          controller only. The controller reads HostedClusterResult for feedback but
+          never writes it.
+        properties:
+          completedAt:
+            format: date-time
+            type: string
+          failureMessage:
+            type: string
+          failureReason:
+            type: string
+          requestedAt:
+            format: date-time
+            type: string
+          targetSource:
+            enum:
+            - automatic
+            - customer
+            type: string
+          targetVersion:
+            type: string
+        type: object
       hostedClusterResult:
         description: |-
           HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.

@@ -10,6 +10,9 @@ rules:
     resources: ["clusters"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["channels"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["clusters/status"]
     verbs: ["get", "update", "patch"]
 ---
