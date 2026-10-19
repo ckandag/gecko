@@ -128,8 +128,8 @@ func parseWeekday(name string) time.Weekday {
 }
 
 // overrideCondition checks if maintenance windows/exclusions should be bypassed
-// due to EOL proximity or critical security/platform issues.
-func overrideCondition(cluster *privatev1.Cluster, isYStream bool) (override bool, reason, message string) {
+// for a critical security or platform issue.
+func overrideCondition(cluster *privatev1.Cluster) (override bool, reason, message string) {
 	// Check for critical security or platform flag on the cluster
 	// This would be set by platform operators for emergency patches
 	if cluster.Annotations != nil {
@@ -138,19 +138,6 @@ func overrideCondition(cluster *privatev1.Cluster, isYStream bool) (override boo
 				"Critical security or platform issue requires immediate patching"
 		}
 	}
-
-	// Y-stream only: check EOL proximity
-	// TODO: This requires EOL date metadata, which would come from the Version API
-	// or Channel status. For now, this is a placeholder for the future implementation.
-	// The EOL check would look like:
-	// if isYStream && cluster.Status.HostedClusterResult != nil {
-	//     currentVersion := cluster.Status.HostedClusterResult.Version
-	//     eolDate := getEOLDate(currentVersion) // from Version API
-	//     if time.Until(eolDate) < 30*24*time.Hour {
-	//         return true, "ApproachingEOL",
-	//             fmt.Sprintf("Version %s reaches EOL on %s", currentVersion, eolDate.Format("2006-01-02"))
-	//     }
-	// }
 
 	return false, "", ""
 }

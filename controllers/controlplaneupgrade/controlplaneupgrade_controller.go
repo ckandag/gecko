@@ -238,8 +238,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		log.Infof(ctx, "no control-plane upgrade policy found, proceeding without a maintenance window")
 	}
 
-	// Check for override conditions (critical security, EOL proximity)
-	override, overrideReason, overrideMsg := overrideCondition(&cluster, isYStream)
+	// Check for critical security or platform overrides.
+	override, overrideReason, overrideMsg := overrideCondition(&cluster)
 
 	// Evaluate maintenance window/exclusions unless override applies
 	if !override {

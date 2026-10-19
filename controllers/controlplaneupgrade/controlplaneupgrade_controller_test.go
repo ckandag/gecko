@@ -160,9 +160,9 @@ func buildReconciler(t *testing.T, cluster *privatev1.Cluster) (*Reconciler, *mo
 
 // readyCluster builds a Cluster with completed=desired=spec=version and
 // HostedClusterAvailable=True, i.e. steady state with nothing active.
-func readyCluster(name, version string, availableUpdates []string) *privatev1.Cluster {
+func readyCluster(version string, availableUpdates []string) *privatev1.Cluster {
 	cluster := &privatev1.Cluster{}
-	cluster.SetName(name)
+	cluster.SetName("cluster-1")
 	cluster.SetNamespace("hyperfleet")
 	cluster.SetGeneration(1)
 	cluster.SetResourceVersion("7")
@@ -217,7 +217,7 @@ func TestReconcile_WaitingForHostedClusterFeedback(t *testing.T) {
 }
 
 func TestReconcile_NoUpgradeAvailable(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.0"})
+	cluster := readyCluster("4.15.0", []string{"4.15.0"})
 
 	r, storeClient := buildReconciler(t, cluster)
 
@@ -234,7 +234,7 @@ func TestReconcile_NoUpgradeAvailable(t *testing.T) {
 }
 
 func TestReconcile_SelectsZStreamCandidate_PatchesSpec(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1", "4.16.0"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1", "4.16.0"})
 
 	r, storeClient := buildReconciler(t, cluster)
 
@@ -259,7 +259,7 @@ func TestReconcile_SelectsZStreamCandidate_PatchesSpec(t *testing.T) {
 }
 
 func TestReconcile_ZStreamDoesNotRequireChannel(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.channel = nil
@@ -275,7 +275,7 @@ func TestReconcile_ZStreamDoesNotRequireChannel(t *testing.T) {
 }
 
 func TestReconcile_PrefersAuthorizedYStreamCandidate(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.22.14", []string{"4.22.17", "4.23.0-ec.1"})
+	cluster := readyCluster("4.22.14", []string{"4.22.17", "4.23.0-ec.1"})
 	cluster.Spec.Release.ChannelGroup = "candidate"
 	meta.SetStatusCondition(&cluster.Status.HostedClusterResult.ObservedConditions, metav1.Condition{
 		Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue, Reason: "AsExpected",
@@ -303,7 +303,7 @@ func TestReconcile_PrefersAuthorizedYStreamCandidate(t *testing.T) {
 // HostedClusterDegraded reading blocks target selection exactly like a confirmed
 // True does — deny by default rather than proceeding without positive evidence.
 func TestReconcile_BlockedOnUnknownDegradation(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Status.HostedClusterResult.ObservedConditions = nil // no confirmation either way
 
 	r, storeClient := buildReconciler(t, cluster)
@@ -320,7 +320,7 @@ func TestReconcile_BlockedOnUnknownDegradation(t *testing.T) {
 }
 
 func TestReconcile_BlockedOnUnhealthyCluster(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterNotAvailable",
 	})
@@ -339,7 +339,7 @@ func TestReconcile_BlockedOnUnhealthyCluster(t *testing.T) {
 }
 
 func TestReconcile_ActiveUpgrade_ObservesProgress(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", nil)
+	cluster := readyCluster("4.15.1", nil)
 	cluster.Status.HostedClusterResult.Version = "4.15.0" // completed
 	cluster.Status.HostedClusterResult.DesiredVersion = "4.15.1"
 	cluster.Spec.Release.Version = "4.15.1"
@@ -358,7 +358,7 @@ func TestReconcile_ActiveUpgrade_ObservesProgress(t *testing.T) {
 }
 
 func TestReconcile_ActiveUpgrade_DoesNotRequireChannelOrPolicy(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", nil)
+	cluster := readyCluster("4.15.1", nil)
 	cluster.Status.HostedClusterResult.Version = "4.15.0"
 	cluster.Status.HostedClusterResult.DesiredVersion = "4.15.1"
 	cluster.Spec.Release.Version = "4.15.1"
@@ -376,7 +376,7 @@ func TestReconcile_ActiveUpgrade_DoesNotRequireChannelOrPolicy(t *testing.T) {
 }
 
 func TestReconcile_NoPolicy_AllowsZStreamUpgrade(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.policies = nil
@@ -391,7 +391,7 @@ func TestReconcile_NoPolicy_AllowsZStreamUpgrade(t *testing.T) {
 }
 
 func TestReconcile_VersionConflictRechecksCluster(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.updateErr = apierrors.NewConflict(schema.GroupResource{Resource: "clusters"}, cluster.Name, fmt.Errorf("conflict"))
 
@@ -412,7 +412,7 @@ func TestReconcile_VersionConflictRechecksCluster(t *testing.T) {
 }
 
 func TestReconcile_NoPolicy_AllowsYStreamUpgrade(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.22.14", []string{"4.22.17", "4.23.0-ec.1"})
+	cluster := readyCluster("4.22.14", []string{"4.22.17", "4.23.0-ec.1"})
 	cluster.Spec.Release.ChannelGroup = "candidate"
 	meta.SetStatusCondition(&cluster.Status.HostedClusterResult.ObservedConditions, metav1.Condition{
 		Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue, Reason: "AsExpected",
@@ -433,7 +433,7 @@ func TestReconcile_NoPolicy_AllowsYStreamUpgrade(t *testing.T) {
 }
 
 func TestReconcile_NoPolicy_StillRequiresHealthyHostedCluster(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Status.HostedClusterResult.ObservedConditions = nil
 
 	r, storeClient := buildReconciler(t, cluster)
@@ -449,7 +449,7 @@ func TestReconcile_NoPolicy_StillRequiresHealthyHostedCluster(t *testing.T) {
 }
 
 func TestReconcile_ZStreamWaitsForMaintenanceWindow(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 
 	r, storeClient := buildReconciler(t, cluster)
 	nextDay := time.Now().UTC().Add(24 * time.Hour)
@@ -472,8 +472,32 @@ func TestReconcile_ZStreamWaitsForMaintenanceWindow(t *testing.T) {
 		meta.FindStatusCondition(captured.Status.Conditions, conditionProgressing).Reason)
 }
 
+func TestReconcile_CriticalUpgradeBypassesMaintenanceWindow(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	cluster.Annotations = map[string]string{"gecko.openshift.io/critical-upgrade": "true"}
+
+	r, storeClient := buildReconciler(t, cluster)
+	nextDay := time.Now().UTC().Add(24 * time.Hour)
+	storeClient.policies[0].Spec.MaintenanceWindow = &privatev1.ControlPlaneMaintenanceWindow{
+		Start:           metav1.NewTime(nextDay),
+		DurationMinutes: 60,
+		Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{
+			Frequency:  "weekly",
+			DaysOfWeek: []string{strings.ToLower(nextDay.Weekday().String())},
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
+
+	require.NoError(t, err)
+	require.True(t, storeClient.updateCalled)
+	require.Equal(t, "4.15.1", storeClient.updated.(*privatev1.Cluster).Spec.Release.Version)
+	conditions := storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions
+	require.Equal(t, "CriticalUpgradeRequired", meta.FindStatusCondition(conditions, conditionAvailable).Reason)
+}
+
 func TestReconcile_InvalidMaintenanceWindowBlocksUpgrade(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.policies[0].Spec.MaintenanceWindow = &privatev1.ControlPlaneMaintenanceWindow{
 		Start:           metav1.Now(),
@@ -494,7 +518,7 @@ func TestReconcile_InvalidMaintenanceWindowBlocksUpgrade(t *testing.T) {
 }
 
 func TestReconcile_MultiplePolicies_SkipsAutomaticUpgrade(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type: conditionAvailable, Status: metav1.ConditionTrue, Reason: "UpdateSelected",
 	})
@@ -518,7 +542,7 @@ func TestReconcile_MultiplePolicies_SkipsAutomaticUpgrade(t *testing.T) {
 }
 
 func TestReconcile_ActiveUpgrade_ReportsReleaseRejection(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", nil)
+	cluster := readyCluster("4.15.1", nil)
 	cluster.Status.HostedClusterResult.Version = "4.15.0" // completed
 	cluster.Status.HostedClusterResult.DesiredVersion = "4.15.1"
 	cluster.Status.HostedClusterResult.ObservedConditions = []metav1.Condition{
@@ -546,7 +570,7 @@ func TestReconcile_ActiveUpgrade_ReportsReleaseRejection(t *testing.T) {
 }
 
 func TestReconcile_ActiveUpgrade_DegradationRemainsProgressing(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", nil)
+	cluster := readyCluster("4.15.1", nil)
 	cluster.Status.HostedClusterResult.Version = "4.15.0" // completed
 	cluster.Status.HostedClusterResult.DesiredVersion = "4.15.1"
 	cluster.Status.HostedClusterResult.ObservedConditions = []metav1.Condition{
@@ -574,7 +598,7 @@ func TestReconcile_ActiveUpgrade_DegradationRemainsProgressing(t *testing.T) {
 func TestReconcile_SpecAheadOfFeedback_DoesNotReselect(t *testing.T) {
 	// spec already requests 4.15.1, but HC feedback hasn't caught up yet
 	// (desired still reports the old completed version).
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Spec.Release.Version = "4.15.1"
 
 	r, storeClient := buildReconciler(t, cluster)
@@ -590,7 +614,7 @@ func TestReconcile_SpecAheadOfFeedback_DoesNotReselect(t *testing.T) {
 }
 
 func TestReconcile_RecordsCompletion(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", []string{"4.15.1"}) // no newer candidate
+	cluster := readyCluster("4.15.1", []string{"4.15.1"}) // no newer candidate
 	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: "4.15.1",
 		TargetSource:  "automatic",

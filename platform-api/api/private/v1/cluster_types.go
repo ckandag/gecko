@@ -592,6 +592,7 @@ type HostedClusterResult struct {
 	// HostedCluster's configured release channel. This is private HC feedback
 	// used by Gecko controllers.
 	// +optional
+	// +listType=set
 	AvailableUpdates []string `json:"availableUpdates,omitempty"`
 	// ObservedConditions are HyperShift/CVO upgrade-readiness conditions normalized
 	// by the hc-controller from raw HostedCluster feedback. This field is recalculated

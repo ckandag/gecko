@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	adapterName = "version-resolution-controller"
 	// DefaultChannelGroup is used when a Cluster does not specify a channel group.
 	DefaultChannelGroup = "stable"
 	requeueStable       = 5 * time.Minute

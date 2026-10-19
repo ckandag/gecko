@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/openshift-online/gecko/controllers/controlplaneupgrade"
+	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -48,7 +49,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
-				Watches(&privatev1.Channel{}, handler.EnqueueRequestsFromMapFunc(channelToClusters(mgr.GetClient()))).
+				Watches(&privatev1.Channel{}, handler.EnqueueRequestsFromMapFunc(channelToClusters(mgr.GetClient(), log))).
 				Watches(&privatev1.ControlPlaneUpgradePolicy{}, handler.EnqueueRequestsFromMapFunc(policyToCluster)).
 				WithOptions(rf.ControllerOpts()).
 				Complete(rec); err != nil {
@@ -86,7 +87,7 @@ func policyToCluster(ctx context.Context, obj client.Object) []reconcile.Request
 }
 
 // channelToClusters maps a Channel change to all Clusters using that channel
-func channelToClusters(c client.Client) handler.MapFunc {
+func channelToClusters(c client.Client, log logger.Logger) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		channel, ok := obj.(*privatev1.Channel)
 		if !ok {
@@ -96,6 +97,7 @@ func channelToClusters(c client.Client) handler.MapFunc {
 		// List all Clusters using this channel
 		var clusterList privatev1.ClusterList
 		if err := c.List(ctx, &clusterList); err != nil {
+			log.Errorf(ctx, "list Clusters for Channel %s: %v", channel.Name, err)
 			return nil
 		}
 

@@ -32,12 +32,8 @@ linters:
     presets:
       - std-error-handling
     rules:
-      # Existing reconcile flows have complexity 32 and 43. Splitting their
-      # state transitions requires a separate review of controller behavior.
-      - linters:
-          - gocyclo
-        text: 'cyclomatic complexity 32 of func `\(\*Reconciler\)\.Reconcile` is high'
-        path: '^hc/hc_controller\.go$'
+      # The nodepool reconcile flow is still complex; splitting its state
+      # transitions requires a separate review of controller behavior.
       - linters:
           - gocyclo
         text: 'cyclomatic complexity 43 of func `\(\*Reconciler\)\.Reconcile` is high'
