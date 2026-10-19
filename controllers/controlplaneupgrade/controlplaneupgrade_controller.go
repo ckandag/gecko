@@ -17,12 +17,13 @@ package controlplaneupgrade
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
+	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -157,7 +158,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var channel privatev1.Channel
 	channelName := cluster.Spec.Release.ChannelGroup
 	if channelName == "" {
-		channelName = "stable"
+		channelName = channelutil.DefaultChannelGroup
 	}
 	if err := r.apiClient.Get(ctx, client.ObjectKey{Name: channelName}, &channel); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -435,7 +436,7 @@ func (r *Reconciler) writeStatus(
 		cond.ObservedGeneration = gen
 		changed = meta.SetStatusCondition(&cluster.Status.Conditions, cond) || changed
 	}
-	if !reflect.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
+	if !equality.Semantic.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
 		cluster.Status.ControlPlaneUpgrade = result
 		changed = true
 	}

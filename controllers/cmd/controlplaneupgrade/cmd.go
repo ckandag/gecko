@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/openshift-online/gecko/controllers/controlplaneupgrade"
-	"github.com/openshift-online/gecko/controllers/util/logger"
+	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -44,12 +44,16 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				controlplaneupgrade.PolicyClusterIDField, policyClusterID); err != nil {
 				return fmt.Errorf("index upgrade policies by cluster ID: %w", err)
 			}
+			if err := mgr.GetFieldIndexer().IndexField(ctx, &privatev1.Cluster{},
+				channelutil.ClusterChannelGroupField, channelutil.ClusterChannelGroup); err != nil {
+				return fmt.Errorf("index clusters by channel group: %w", err)
+			}
 
 			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log)
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
-				Watches(&privatev1.Channel{}, handler.EnqueueRequestsFromMapFunc(channelToClusters(mgr.GetClient(), log))).
+				Watches(&privatev1.Channel{}, handler.EnqueueRequestsFromMapFunc(channelutil.ToClusters(mgr.GetClient(), log))).
 				Watches(&privatev1.ControlPlaneUpgradePolicy{}, handler.EnqueueRequestsFromMapFunc(policyToCluster)).
 				WithOptions(rf.ControllerOpts()).
 				Complete(rec); err != nil {
@@ -83,39 +87,5 @@ func policyToCluster(ctx context.Context, obj client.Object) []reconcile.Request
 			Namespace: policy.Namespace,
 			Name:      policy.Spec.ClusterID,
 		}},
-	}
-}
-
-// channelToClusters maps a Channel change to all Clusters using that channel
-func channelToClusters(c client.Client, log logger.Logger) handler.MapFunc {
-	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		channel, ok := obj.(*privatev1.Channel)
-		if !ok {
-			return nil
-		}
-
-		// List all Clusters using this channel
-		var clusterList privatev1.ClusterList
-		if err := c.List(ctx, &clusterList); err != nil {
-			log.Errorf(ctx, "list Clusters for Channel %s: %v", channel.Name, err)
-			return nil
-		}
-
-		var requests []reconcile.Request
-		for _, cluster := range clusterList.Items {
-			channelGroup := cluster.Spec.Release.ChannelGroup
-			if channelGroup == "" {
-				channelGroup = "stable" // default
-			}
-			if channelGroup == channel.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: client.ObjectKey{
-						Namespace: cluster.Namespace,
-						Name:      cluster.Name,
-					},
-				})
-			}
-		}
-		return requests
 	}
 }

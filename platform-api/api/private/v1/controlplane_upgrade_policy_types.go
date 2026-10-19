@@ -40,14 +40,14 @@ type ControlPlaneUpgradePolicySpec struct {
 	// +required
 	ClusterID string `json:"clusterID"`
 
-	// MaintenanceWindow defines when an automatic y-stream upgrade may start.
+	// MaintenanceWindow defines when an automatic control-plane upgrade may start.
 	// When omitted, the platform may start an automatic upgrade at any time.
 	// +orlop:public
 	// +optional
 	MaintenanceWindow *ControlPlaneMaintenanceWindow `json:"maintenanceWindow,omitempty"`
 
 	// MaintenanceExclusions are non-recurring periods during which automatic
-	// y-stream upgrades must not start.
+	// control-plane upgrades must not start.
 	// +orlop:public
 	// +optional
 	// +listType=map
@@ -82,8 +82,8 @@ type ControlPlaneMaintenanceRecurrence struct {
 	// +required
 	Frequency string `json:"frequency"`
 
-	// DaysOfWeek contains the UTC days on which the window may start, for
-	// example "monday" or "saturday".
+	// DaysOfWeek contains lowercase UTC day names on which the window may start,
+	// for example "monday" or "saturday". Other casing is rejected by validation.
 	// +orlop:public
 	// +required
 	// +listType=set

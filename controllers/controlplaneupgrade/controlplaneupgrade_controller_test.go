@@ -628,3 +628,23 @@ func TestReconcile_RecordsCompletion(t *testing.T) {
 	captured := storeClient.statusWriter.captured.(*privatev1.Cluster)
 	require.NotNil(t, captured.Status.ControlPlaneUpgrade.CompletedAt)
 }
+
+func TestWriteStatusSkipsSemanticallyEqualTime(t *testing.T) {
+	instant := time.Date(2026, time.October, 19, 12, 0, 0, 0, time.UTC)
+	local := metav1.NewTime(instant.In(time.FixedZone("EDT", -4*60*60)))
+	utc := metav1.NewTime(instant)
+	cluster := &privatev1.Cluster{
+		Status: privatev1.ClusterStatus{ControlPlaneUpgrade: &privatev1.ControlPlaneUpgradeResult{
+			TargetVersion: "4.23.0", RequestedAt: &local,
+		}},
+	}
+	result := cluster.Status.ControlPlaneUpgrade.DeepCopy()
+	result.RequestedAt = &utc
+	store := &mockStoreClient{}
+	r := NewReconciler(store, testLogger(t))
+
+	_, err := r.writeStatus(context.Background(), cluster, result, requeueStable)
+
+	require.NoError(t, err)
+	require.Nil(t, store.statusWriter, "equivalent instants must not cause a status write")
+}

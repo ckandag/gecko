@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
@@ -15,6 +14,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -563,7 +563,7 @@ func (r *Reconciler) applyHostedClusterResult(
 		AvailableUpdates:   availableUpdates,
 		ObservedConditions: observed,
 	}
-	if reflect.DeepEqual(previous, desired) {
+	if equality.Semantic.DeepEqual(previous, desired) {
 		return false, nil
 	}
 	cluster.Status.HostedClusterResult = desired

@@ -32,7 +32,7 @@ properties:
       maintenanceExclusions:
         description: |-
           MaintenanceExclusions are non-recurring periods during which automatic
-          y-stream upgrades must not start.
+          control-plane upgrades must not start.
         items:
           description: ControlPlaneMaintenanceExclusion defines one non-recurring
             blackout period.
@@ -56,7 +56,7 @@ properties:
         x-kubernetes-list-type: map
       maintenanceWindow:
         description: |-
-          MaintenanceWindow defines when an automatic y-stream upgrade may start.
+          MaintenanceWindow defines when an automatic control-plane upgrade may start.
           When omitted, the platform may start an automatic upgrade at any time.
         properties:
           durationMinutes:
@@ -72,8 +72,8 @@ properties:
             properties:
               daysOfWeek:
                 description: |-
-                  DaysOfWeek contains the UTC days on which the window may start, for
-                  example "monday" or "saturday".
+                  DaysOfWeek contains lowercase UTC day names on which the window may start,
+                  for example "monday" or "saturday". Other casing is rejected by validation.
                 items:
                   type: string
                 type: array

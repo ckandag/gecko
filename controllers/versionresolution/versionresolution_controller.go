@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -18,11 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const (
-	// DefaultChannelGroup is used when a Cluster does not specify a channel group.
-	DefaultChannelGroup = "stable"
-	requeueStable       = 5 * time.Minute
-)
+const requeueStable = 5 * time.Minute
 
 // Reconciler resolves the OCP release image for a cluster via Cincinnati.
 type Reconciler struct {
@@ -70,7 +67,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	version := cluster.Spec.Release.Version
 
-	channelGroup := DefaultChannelGroup
+	channelGroup := channelutil.DefaultChannelGroup
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
 	}

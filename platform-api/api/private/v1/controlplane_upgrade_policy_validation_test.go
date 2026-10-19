@@ -69,6 +69,12 @@ func TestControlPlaneUpgradePolicyValidateCreate_InvalidPolicy(t *testing.T) {
 			},
 		},
 		{
+			name: "weekday must be lowercase",
+			mutate: func(policy *ControlPlaneUpgradePolicy) {
+				policy.Spec.MaintenanceWindow.Recurrence.DaysOfWeek = []string{"Wednesday"}
+			},
+		},
+		{
 			name: "duplicate weekday",
 			mutate: func(policy *ControlPlaneUpgradePolicy) {
 				policy.Spec.MaintenanceWindow.Recurrence.DaysOfWeek = []string{"saturday", "saturday"}
