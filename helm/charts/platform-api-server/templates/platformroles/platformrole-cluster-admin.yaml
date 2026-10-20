@@ -19,4 +19,8 @@ spec:
     - nodepool.get
     - nodepool.update
     - nodepool.delete
+    - nodepoolupgraderequest.create
+    - nodepoolupgraderequest.list
+    - nodepoolupgraderequest.get
+    - nodepoolupgraderequest.delete
 {{- end }}

@@ -307,6 +307,8 @@ func TestParseClusterChildRequestPath(t *testing.T) {
 		{name: "upgrade policy collection", path: "/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/example/controlplaneupgradepolicies", plural: "controlplaneupgradepolicies"},
 		{name: "upgrade request collection", path: "/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/example/controlplaneupgraderequests", plural: "controlplaneupgraderequests"},
 		{name: "upgrade request item", path: "/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/example/controlplaneupgraderequests/request-1", plural: "controlplaneupgraderequests", named: true},
+		{name: "nodepool upgrade request collection", path: "/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/example/nodepoolupgraderequests", plural: "nodepoolupgraderequests"},
+		{name: "nodepool upgrade request item", path: "/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/example/nodepoolupgraderequests/request-1", plural: "nodepoolupgraderequests", named: true},
 	}
 
 	for _, tt := range tests {
@@ -319,6 +321,31 @@ func TestParseClusterChildRequestPath(t *testing.T) {
 				t.Fatalf("parsed request = %+v, want namespace customer, plural %q, named %t", got, tt.plural, tt.named)
 			}
 		})
+	}
+}
+
+func TestNodePoolUpgradeRequestActions(t *testing.T) {
+	tests := []struct {
+		method string
+		named  bool
+		want   Action
+	}{
+		{method: http.MethodPost, want: CreateNodePoolUpgradeRequest},
+		{method: http.MethodGet, want: ListNodePoolUpgradeRequests},
+		{method: http.MethodGet, named: true, want: GetNodePoolUpgradeRequest},
+		{method: http.MethodDelete, named: true, want: DeleteNodePoolUpgradeRequest},
+	}
+	for _, tt := range tests {
+		got, err := actionForRequest(tt.method, "nodepoolupgraderequests", tt.named)
+		if err != nil {
+			t.Fatalf("%s named=%t: %v", tt.method, tt.named, err)
+		}
+		if got != tt.want {
+			t.Errorf("%s named=%t: got %s, want %s", tt.method, tt.named, got, tt.want)
+		}
+	}
+	if _, err := actionForRequest(http.MethodPatch, "nodepoolupgraderequests", true); err == nil {
+		t.Fatal("NodePool upgrade requests must not be editable through the public API")
 	}
 }
 

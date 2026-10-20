@@ -284,6 +284,8 @@ properties:
         x-kubernetes-list-map-keys:
         - type
         x-kubernetes-list-type: map
+      currentVersion:
+        type: string
     type: object
 required:
 - spec

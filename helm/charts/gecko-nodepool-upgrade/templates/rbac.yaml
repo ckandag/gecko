@@ -1,0 +1,36 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gecko-nodepool-upgrade.fullname" . }}
+  labels:
+    {{- include "gecko-nodepool-upgrade.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["nodepoolupgraderequests"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["nodepoolupgraderequests/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["nodepools"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["clusters", "versions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gecko-nodepool-upgrade.fullname" . }}
+  labels:
+    {{- include "gecko-nodepool-upgrade.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "gecko-nodepool-upgrade.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gecko-nodepool-upgrade.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

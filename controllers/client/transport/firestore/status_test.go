@@ -266,6 +266,11 @@ func TestExtractNPFields(t *testing.T) {
 			},
 		},
 		{
+			name:     "observed version is independent of conditions",
+			input:    `{"status": {"version": "4.22.16", "conditions": []}}`,
+			expected: map[string]string{"version": "4.22.16"},
+		},
+		{
 			name:     "empty conditions array",
 			input:    `{"status": {"conditions": []}}`,
 			expected: map[string]string{},

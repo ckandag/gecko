@@ -384,6 +384,11 @@ properties:
         x-kubernetes-list-map-keys:
         - type
         x-kubernetes-list-type: map
+      currentVersion:
+        description: |-
+          currentVersion is the last OpenShift version HyperShift reports as applied
+          to this NodePool. It does not advance merely because an upgrade was requested.
+        type: string
       versionResolution:
         description: |-
           VersionResolution is written by the nodepool-vr controller.

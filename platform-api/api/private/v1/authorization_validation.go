@@ -39,6 +39,11 @@ var validAuthorizationPermissions = map[string]struct{}{
 	"role.get":           {},
 	"role.update":        {},
 	"role.delete":        {},
+
+	"nodepoolupgraderequest.create": {},
+	"nodepoolupgraderequest.list":   {},
+	"nodepoolupgraderequest.get":    {},
+	"nodepoolupgraderequest.delete": {},
 }
 
 // ValidAuthorizationPermissions returns the complete set of permissions

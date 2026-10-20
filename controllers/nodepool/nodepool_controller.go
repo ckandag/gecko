@@ -373,6 +373,11 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		fmt.Sprintf("clusters-%s", clusterID), np.Name)
 	// rs is nil if npKey not in map; nil-safe below.
 	rs := mwStatus.ResourceStatuses[npKey]
+	versionChanged := false
+	if rs != nil && rs["version"] != "" && np.Status.CurrentVersion != rs["version"] {
+		np.Status.CurrentVersion = rs["version"]
+		versionChanged = true
+	}
 	availableStatus := "False"
 	allNodesHealthy := "False"
 	// Empty string for progressing conditions: != "True" captures absent fields.
@@ -448,7 +453,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		Reason:             progressingReason,
 		ObservedGeneration: gen,
 	})
-	return a || b || c || d
+	return a || b || c || d || versionChanged
 }
 
 // defaultReplicas is the hardcoded default for this POC.

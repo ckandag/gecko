@@ -653,6 +653,31 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	require.Equal(t, "AsExpected", progressing.Reason)
 }
 
+func TestApplyStatusConditions_ObservedVersionChangeIsPersisted(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+	status := &transport.Status{
+		Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":            "True",
+				"allNodesHealthyCondition":  "True",
+				"allMachinesReadyCondition": "True",
+				"updatingConfigCondition":   "False",
+				"updatingVersionCondition":  "False",
+				"version":                   "4.16.0",
+			},
+		},
+	}
+	r := &Reconciler{}
+	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	require.False(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	status.ResourceStatuses[npKey]["version"] = "4.16.1"
+	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	require.Equal(t, "4.16.1", np.Status.CurrentVersion)
+}
+
 // ---------------------------------------------------------------------------
 // Test cases – happy path and condition-driven requeue
 // ---------------------------------------------------------------------------
@@ -703,6 +728,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.NotNil(t, progressing)
 	require.Equal(t, metav1.ConditionFalse, progressing.Status)
 	require.Equal(t, "AsExpected", progressing.Reason)
+	require.Equal(t, "4.16.0", captured.Status.CurrentVersion)
 }
 
 // TestReconcile_MWNotApplied_RequeuesPending verifies that when Applied=False the
