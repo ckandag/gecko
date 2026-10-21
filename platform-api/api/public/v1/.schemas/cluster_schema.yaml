@@ -397,14 +397,14 @@ properties:
           controller only. The controller reads HostedClusterResult for feedback but
           never writes it.
         properties:
-          completedAt:
+          completedTime:
             format: date-time
             type: string
           failureMessage:
             type: string
           failureReason:
             type: string
-          requestedAt:
+          requestedTime:
             format: date-time
             type: string
           targetSource:

@@ -602,8 +602,8 @@ properties:
       controlPlaneUpgrade:
         description: ControlPlaneUpgrade is written by the control-plane-upgrade controller.
         properties:
-          completedAt:
-            description: CompletedAt is when TargetVersion completed successfully.
+          completedTime:
+            description: CompletedTime is when TargetVersion completed successfully.
             format: date-time
             type: string
           failureMessage:
@@ -614,9 +614,9 @@ properties:
             description: FailureReason is set when the upgrade to TargetVersion failed
               or stalled.
             type: string
-          requestedAt:
+          requestedTime:
             description: |-
-              RequestedAt is when the control-plane-upgrade controller selected or
+              RequestedTime is when the control-plane-upgrade controller selected or
               requested TargetVersion. It does not indicate that HyperShift has
               accepted or begun rolling it out; ControlPlaneUpgradeProgressing reports
               that separately.

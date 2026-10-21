@@ -622,17 +622,17 @@ type ControlPlaneUpgradeResult struct {
 	// +optional
 	// +kubebuilder:validation:Enum=automatic;customer
 	TargetSource string `json:"targetSource,omitempty"`
-	// RequestedAt is when the control-plane-upgrade controller selected or
+	// RequestedTime is when the control-plane-upgrade controller selected or
 	// requested TargetVersion. It does not indicate that HyperShift has
 	// accepted or begun rolling it out; ControlPlaneUpgradeProgressing reports
 	// that separately.
 	// +orlop:public
 	// +optional
-	RequestedAt *metav1.Time `json:"requestedAt,omitempty"`
-	// CompletedAt is when TargetVersion completed successfully.
+	RequestedTime *metav1.Time `json:"requestedTime,omitempty"`
+	// CompletedTime is when TargetVersion completed successfully.
 	// +orlop:public
 	// +optional
-	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+	CompletedTime *metav1.Time `json:"completedTime,omitempty"`
 	// FailureReason is set when the upgrade to TargetVersion failed or stalled.
 	// +orlop:public
 	// +optional

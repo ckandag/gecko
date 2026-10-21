@@ -385,7 +385,7 @@ func healthOK(clusterConditions, observed []metav1.Condition, isYStream bool) (o
 }
 
 // recordActiveTarget returns the ControlPlaneUpgradeResult to report while target is
-// active. If previous already tracks target, its RequestedAt is preserved and any
+// active. If previous already tracks target, its RequestedTime is preserved and any
 // failure recorded for it is cleared (the caller re-populates FailureReason/Message
 // this reconcile if the failure is still present). Otherwise this is a fresh attempt.
 func recordActiveTarget(previous *privatev1.ControlPlaneUpgradeResult, target string) *privatev1.ControlPlaneUpgradeResult {
@@ -399,7 +399,7 @@ func recordActiveTarget(previous *privatev1.ControlPlaneUpgradeResult, target st
 	return &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: target,
 		TargetSource:  targetSourceAutomatic,
-		RequestedAt:   &now,
+		RequestedTime: &now,
 	}
 }
 
@@ -410,10 +410,10 @@ func recordCompletion(previous *privatev1.ControlPlaneUpgradeResult, completed s
 	if previous == nil {
 		return nil
 	}
-	if previous.TargetVersion == completed && previous.CompletedAt == nil {
+	if previous.TargetVersion == completed && previous.CompletedTime == nil {
 		result := previous.DeepCopy()
 		now := metav1.Now()
-		result.CompletedAt = &now
+		result.CompletedTime = &now
 		result.FailureReason = ""
 		result.FailureMessage = ""
 		return result

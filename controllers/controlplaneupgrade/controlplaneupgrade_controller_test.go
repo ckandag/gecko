@@ -255,7 +255,7 @@ func TestReconcile_SelectsZStreamCandidate_PatchesSpec(t *testing.T) {
 	require.NotNil(t, captured.Status.ControlPlaneUpgrade)
 	require.Equal(t, "4.15.1", captured.Status.ControlPlaneUpgrade.TargetVersion)
 	require.Equal(t, "automatic", captured.Status.ControlPlaneUpgrade.TargetSource)
-	require.NotNil(t, captured.Status.ControlPlaneUpgrade.RequestedAt)
+	require.NotNil(t, captured.Status.ControlPlaneUpgrade.RequestedTime)
 }
 
 func TestReconcile_ZStreamDoesNotRequireChannel(t *testing.T) {
@@ -649,7 +649,7 @@ func TestReconcile_RecordsCompletion(t *testing.T) {
 	require.NoError(t, err)
 
 	captured := storeClient.statusWriter.captured.(*privatev1.Cluster)
-	require.NotNil(t, captured.Status.ControlPlaneUpgrade.CompletedAt)
+	require.NotNil(t, captured.Status.ControlPlaneUpgrade.CompletedTime)
 }
 
 func TestWriteStatusSkipsSemanticallyEqualTime(t *testing.T) {
@@ -658,11 +658,11 @@ func TestWriteStatusSkipsSemanticallyEqualTime(t *testing.T) {
 	utc := metav1.NewTime(instant)
 	cluster := &privatev1.Cluster{
 		Status: privatev1.ClusterStatus{ControlPlaneUpgrade: &privatev1.ControlPlaneUpgradeResult{
-			TargetVersion: "4.23.0", RequestedAt: &local,
+			TargetVersion: "4.23.0", RequestedTime: &local,
 		}},
 	}
 	result := cluster.Status.ControlPlaneUpgrade.DeepCopy()
-	result.RequestedAt = &utc
+	result.RequestedTime = &utc
 	store := &mockStoreClient{}
 	r := NewReconciler(store, testLogger(t))
 
