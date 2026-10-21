@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -183,27 +184,30 @@ func main() {
 			Context:    context.Background(),
 		})
 	} else {
-		storageFactory = func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
-			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
-		}
+		// The API server and storage-backed validators must see the same objects
+		// when running without an external database.
+		storageFactory = newSharedMemoryStorageFactory()
 		log.Println("No SPANNER_DATABASE or DB_HOST set, using in-memory storage")
 	}
 
 	// Create server with resource configuration
+	privateScheme := getPrivateScheme()
+	stores, err := authz.NewStores(storageFactory, privateScheme)
+	if err != nil {
+		log.Fatalf("Failed to create authorization stores: %v", err)
+	}
+	upgradeValidator, err := newNodePoolUpgradeValidator(storageFactory, privateScheme)
+	if err != nil {
+		log.Fatalf("Failed to create NodePool upgrade validator: %v", err)
+	}
+	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
+		RoleExists:                     stores.RoleExists,
+		PlatformRoleExists:             stores.PlatformRoleExists,
+		ValidateNodePoolUpgradeRequest: upgradeValidator.Validate,
+	})
+
 	publicResources := getPublicResources()
-	publicMiddlewareFactory := func(factory apiserver.StorageFactory, privateScheme *runtime.Scheme, stopCh <-chan struct{}) ([]func(http.Handler) http.Handler, error) {
-		stores, err := authz.NewStores(factory, privateScheme)
-		if err != nil {
-			return nil, err
-		}
-
-		// API type validation uses these callbacks to verify RoleBinding
-		// references without importing the authz package into the API types.
-		privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
-			RoleExists:         stores.RoleExists,
-			PlatformRoleExists: stores.PlatformRoleExists,
-		})
-
+	publicMiddlewareFactory := func(_ apiserver.StorageFactory, _ *runtime.Scheme, stopCh <-chan struct{}) ([]func(http.Handler) http.Handler, error) {
 		if disableAuth {
 			return nil, nil
 		}
@@ -225,7 +229,7 @@ func main() {
 		Private: apiserver.PrivateAPIOptions{
 			Port:                     privatePort,
 			Resources:                getPrivateResources(),
-			Scheme:                   getPrivateScheme(),
+			Scheme:                   privateScheme,
 			TLSCertFile:              tlsCertFile,
 			TLSKeyFile:               tlsKeyFile,
 			AuthenticationKubeconfig: authnKubeconfig,
@@ -274,6 +278,20 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+func newSharedMemoryStorageFactory() apiserver.StorageFactory {
+	type memoryStoreKey struct {
+		resourceType string
+		scheme       *runtime.Scheme
+		gvk          runtimeschema.GroupVersionKind
+	}
+	var memoryStores sync.Map
+	return func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		key := memoryStoreKey{resourceType: resourceType, scheme: scheme, gvk: gvk}
+		store, _ := memoryStores.LoadOrStore(key, memory.NewMemoryStore(resourceType, scheme, gvk))
+		return store.(storage.ResourceStore), nil
+	}
 }
 
 const publicAuthorizationEnabledFlag = "gecko.public-api.authorization.enabled"

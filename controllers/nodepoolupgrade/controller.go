@@ -138,7 +138,7 @@ func (r *Reconciler) acceptOrWait(ctx context.Context, request *privatev1.NodePo
 	if channelGroup == "" {
 		channelGroup = defaultChannelGroup
 	}
-	if !validMinorStep(current, target, channelGroup) {
+	if !privatev1.ValidNodePoolUpgradeStep(current, target, channelGroup) {
 		return r.reject(ctx, request, "UnsupportedVersionStep",
 			"Target must be a z-stream or next-minor upgrade, except an EUS-to-EUS step")
 	}
@@ -278,14 +278,4 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func validMinorStep(current, target *utilversion.Version, channelGroup string) bool {
-	if current.Major() != target.Major() {
-		return false
-	}
-	if target.Minor() == current.Minor() || target.Minor() == current.Minor()+1 {
-		return true
-	}
-	return channelGroup == "eus" && current.Minor()%2 == 0 && target.Minor() == current.Minor()+2
 }

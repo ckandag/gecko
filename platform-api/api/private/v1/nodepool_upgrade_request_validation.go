@@ -9,10 +9,9 @@ import (
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 )
 
-// ValidateCreate checks the request shape. Version-path, Cluster relationship,
-// and NodePool readiness checks run at execution time so scheduled requests
-// are evaluated against current state.
-func (r *NodePoolUpgradeRequest) ValidateCreate(_ context.Context) error {
+// ValidateCreate checks the request shape and, when storage-backed validation
+// is configured, the referenced resources and target release.
+func (r *NodePoolUpgradeRequest) ValidateCreate(ctx context.Context) error {
 	if r.Spec.ClusterID == "" || r.Spec.NodePoolID == "" || r.Spec.TargetVersion == "" {
 		return fmt.Errorf("spec.clusterID, spec.nodePoolID, and spec.targetVersion are required")
 	}
@@ -23,6 +22,9 @@ func (r *NodePoolUpgradeRequest) ValidateCreate(_ context.Context) error {
 		return fmt.Errorf("spec.startTime must be a valid timestamp")
 	}
 
+	if validate := getValidatorDeps().ValidateNodePoolUpgradeRequest; validate != nil {
+		return validate(ctx, r)
+	}
 	return nil
 }
 
@@ -44,4 +46,16 @@ func (r *NodePoolUpgradeRequest) ValidateDelete(_ context.Context) error {
 		return fmt.Errorf("an accepted NodePool upgrade request cannot be deleted")
 	}
 	return nil
+}
+
+// ValidNodePoolUpgradeStep reports whether the target stays in the current
+// minor, advances one minor, or takes the supported EUS-to-EUS step.
+func ValidNodePoolUpgradeStep(current, target *utilversion.Version, channelGroup string) bool {
+	if current.Major() != target.Major() {
+		return false
+	}
+	if target.Minor() == current.Minor() || target.Minor() == current.Minor()+1 {
+		return true
+	}
+	return channelGroup == "eus" && current.Minor()%2 == 0 && target.Minor() == current.Minor()+2
 }

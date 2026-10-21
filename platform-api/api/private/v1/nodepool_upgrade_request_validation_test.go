@@ -2,6 +2,8 @@ package v1
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,23 @@ func validNodePoolUpgradeRequest() *NodePoolUpgradeRequest {
 		Spec: NodePoolUpgradeRequestSpec{
 			ClusterID: "example", NodePoolID: "workers", TargetVersion: "4.22.16",
 		},
+	}
+}
+
+func TestNodePoolUpgradeRequestValidateCreateUsesStorageValidator(t *testing.T) {
+	SetValidatorDeps(ValidatorDeps{
+		ValidateNodePoolUpgradeRequest: func(_ context.Context, request *NodePoolUpgradeRequest) error {
+			if request.Spec.NodePoolID != "workers" {
+				t.Fatalf("NodePoolID = %q, want workers", request.Spec.NodePoolID)
+			}
+			return errors.New("NodePool does not exist")
+		},
+	})
+	t.Cleanup(func() { SetValidatorDeps(ValidatorDeps{}) })
+
+	err := validNodePoolUpgradeRequest().ValidateCreate(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "NodePool does not exist") {
+		t.Fatalf("ValidateCreate() error = %v, want NodePool error", err)
 	}
 }
 
