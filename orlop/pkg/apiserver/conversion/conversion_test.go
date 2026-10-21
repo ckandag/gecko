@@ -285,6 +285,45 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 	}
 }
 
+func TestConverter_PrivateToPublic_NodePoolUpgradeRequestConditions(t *testing.T) {
+	gvk := schema.GroupVersion{Group: "test.example.com", Version: "v1"}.WithKind("NodePoolUpgradeRequest")
+	newScheme := func() *runtime.Scheme {
+		return makeTestScheme(func(scheme *runtime.Scheme) {
+			scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		})
+	}
+	converter := NewConverter(newScheme(), newScheme(), "")
+	private := newTestObject(withStatus(map[string]interface{}{
+		"conditions": []interface{}{
+			map[string]interface{}{"type": "Scheduled", "status": "False"},
+			map[string]interface{}{"type": "Accepted", "status": "True"},
+			map[string]interface{}{"type": "Progressing", "status": "False"},
+			map[string]interface{}{"type": "Completed", "status": "True"},
+			map[string]interface{}{"type": "Failed", "status": "False"},
+			map[string]interface{}{"type": "InternalOnly", "status": "True"},
+		},
+	}))
+	private.SetGroupVersionKind(gvk)
+
+	public, err := converter.PrivateToPublic(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conditions, found, err := unstructured.NestedSlice(public.(*unstructured.Unstructured).Object, "status", "conditions")
+	if err != nil || !found {
+		t.Fatalf("public conditions missing: found=%t, err=%v", found, err)
+	}
+	want := []string{"Scheduled", "Accepted", "Progressing", "Completed", "Failed"}
+	if len(conditions) != len(want) {
+		t.Fatalf("public conditions = %v, want %v", conditions, want)
+	}
+	for i, condition := range conditions {
+		if got := condition.(map[string]interface{})["type"]; got != want[i] {
+			t.Errorf("condition %d type = %v, want %s", i, got, want[i])
+		}
+	}
+}
+
 func TestConverter_PublicToPrivate(t *testing.T) {
 	tests := []struct {
 		name        string
