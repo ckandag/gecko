@@ -65,6 +65,8 @@ type ControlPlaneMaintenanceWindow struct {
 	// DurationMinutes is how long each occurrence remains open, in minutes.
 	// +orlop:public
 	// +required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1440
 	DurationMinutes int32 `json:"durationMinutes"`
 
 	// Recurrence describes how the window repeats using customer-friendly

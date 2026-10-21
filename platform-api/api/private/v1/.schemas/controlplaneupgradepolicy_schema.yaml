@@ -63,6 +63,8 @@ properties:
             description: DurationMinutes is how long each occurrence remains open,
               in minutes.
             format: int32
+            maximum: 1440
+            minimum: 1
             type: integer
           recurrence:
             description: |-

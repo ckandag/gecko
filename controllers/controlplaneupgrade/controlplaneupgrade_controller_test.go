@@ -474,7 +474,7 @@ func TestReconcile_ZStreamWaitsForMaintenanceWindow(t *testing.T) {
 
 func TestReconcile_CriticalUpgradeBypassesMaintenanceWindow(t *testing.T) {
 	cluster := readyCluster("4.15.0", []string{"4.15.1"})
-	cluster.Annotations = map[string]string{"gecko.openshift.io/critical-upgrade": "true"}
+	cluster.Annotations = map[string]string{criticalUpgradeAnnotation: "true"}
 
 	r, storeClient := buildReconciler(t, cluster)
 	nextDay := time.Now().UTC().Add(24 * time.Hour)
@@ -494,6 +494,29 @@ func TestReconcile_CriticalUpgradeBypassesMaintenanceWindow(t *testing.T) {
 	require.Equal(t, "4.15.1", storeClient.updated.(*privatev1.Cluster).Spec.Release.Version)
 	conditions := storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions
 	require.Equal(t, "CriticalUpgradeRequired", meta.FindStatusCondition(conditions, conditionAvailable).Reason)
+}
+
+func TestReconcile_PublicCriticalUpgradeAnnotationDoesNotBypassMaintenanceWindow(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	cluster.Annotations = map[string]string{"gecko.openshift.io/critical-upgrade": "true"}
+
+	r, storeClient := buildReconciler(t, cluster)
+	nextDay := time.Now().UTC().Add(24 * time.Hour)
+	storeClient.policies[0].Spec.MaintenanceWindow = &privatev1.ControlPlaneMaintenanceWindow{
+		Start:           metav1.NewTime(nextDay),
+		DurationMinutes: 60,
+		Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{
+			Frequency:  "weekly",
+			DaysOfWeek: []string{strings.ToLower(nextDay.Weekday().String())},
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
+
+	require.NoError(t, err)
+	require.False(t, storeClient.updateCalled)
+	conditions := storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions
+	require.Equal(t, "OutsideMaintenanceWindow", meta.FindStatusCondition(conditions, conditionProgressing).Reason)
 }
 
 func TestReconcile_InvalidMaintenanceWindowBlocksUpgrade(t *testing.T) {

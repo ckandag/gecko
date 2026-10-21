@@ -51,6 +51,12 @@ func TestControlPlaneUpgradePolicyValidateCreate_InvalidPolicy(t *testing.T) {
 			},
 		},
 		{
+			name: "duration exceeds 24 hours",
+			mutate: func(policy *ControlPlaneUpgradePolicy) {
+				policy.Spec.MaintenanceWindow.DurationMinutes = 1441
+			},
+		},
+		{
 			name: "unsupported frequency",
 			mutate: func(policy *ControlPlaneUpgradePolicy) {
 				policy.Spec.MaintenanceWindow.Recurrence.Frequency = "daily"
@@ -122,6 +128,14 @@ func TestControlPlaneUpgradePolicyValidateUpdate(t *testing.T) {
 
 	if err := updatedPolicy.ValidateUpdate(t.Context(), oldPolicy); err != nil {
 		t.Fatalf("ValidateUpdate() error = %v", err)
+	}
+}
+
+func TestControlPlaneUpgradePolicyValidateCreate_MaximumDuration(t *testing.T) {
+	policy := validControlPlaneUpgradePolicy()
+	policy.Spec.MaintenanceWindow.DurationMinutes = 1440
+	if err := policy.ValidateCreate(t.Context()); err != nil {
+		t.Fatalf("ValidateCreate() error = %v", err)
 	}
 }
 

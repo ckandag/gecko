@@ -7,6 +7,10 @@ import (
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 )
 
+// Only the private API can set this annotation. Public API conversion strips
+// this prefix from customer input, so customers cannot bypass maintenance.
+const criticalUpgradeAnnotation = "private.orlop.gcp.managed.openshift.io/critical-upgrade"
+
 // maintenancePermitted evaluates whether an upgrade may start at the given time
 // according to the cluster's maintenance policy. It returns true if no policy is
 // set (upgrades permitted at any time), or if the current time falls within a
@@ -133,7 +137,7 @@ func overrideCondition(cluster *privatev1.Cluster) (override bool, reason, messa
 	// Check for critical security or platform flag on the cluster
 	// This would be set by platform operators for emergency patches
 	if cluster.Annotations != nil {
-		if cluster.Annotations["gecko.openshift.io/critical-upgrade"] == "true" {
+		if cluster.Annotations[criticalUpgradeAnnotation] == "true" {
 			return true, "CriticalUpgradeRequired",
 				"Critical security or platform issue requires immediate patching"
 		}
