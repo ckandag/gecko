@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/open-feature/go-sdk v1.19.0
-	github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.1
+	github.com/open-feature/go-sdk-contrib/providers/flagd v0.8.0
 	github.com/openshift-online/gecko/orlop v0.0.0-00010101000000-000000000000
 	golang.org/x/text v0.43.0
 	k8s.io/apiextensions-apiserver v0.37.1
@@ -93,7 +93,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/open-feature/flagd-schemas v0.2.13 // indirect
-	github.com/open-feature/flagd/core v0.18.0 // indirect
+	github.com/open-feature/flagd/core v0.19.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect
