@@ -250,7 +250,7 @@ func (r *Reconciler) reconcileCompletedOrManual(
 	// Persist completion before considering another target. In particular, a
 	// missing automatic policy must not leave a completed manual upgrade marked
 	// as progressing indefinitely.
-	if !reflect.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
+	if !equality.Semantic.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
 		message := fmt.Sprintf("Control-plane upgrade to %s completed", completed)
 		statusResult, err := r.writeStatus(ctx, cluster, result, requeuePending,
 			newCondition(conditionAvailable, metav1.ConditionFalse, "UpgradeCompleted", message),
@@ -395,7 +395,7 @@ func (r *Reconciler) reconcileActiveUpgrade(
 		// If the request is for the same target and is older than the previous request, accept it.
 		if !accepted && request.Spec.TargetVersion == target &&
 			(previous == nil || (previous.TargetSource == targetSourceCustomer &&
-				previous.RequestedAt != nil && !request.CreationTimestamp.After(previous.RequestedAt.Time))) {
+				previous.RequestedTime != nil && !request.CreationTimestamp.After(previous.RequestedTime.Time))) {
 			accepted = true
 			result.TargetSource = targetSourceCustomer
 			decisions = append(decisions, requestDecision{request, "Accepted", "UpgradeRequested"})

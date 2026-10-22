@@ -821,7 +821,7 @@ func TestWriteStatusSkipsSemanticallyEqualTime(t *testing.T) {
 }
 
 func TestReconcile_ManualCompletionWithoutPolicy(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", []string{"4.15.2"})
+	cluster := readyCluster("4.15.1", []string{"4.15.2"})
 	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: "4.15.1", TargetSource: targetSourceCustomer,
 	}
@@ -844,12 +844,12 @@ func TestReconcile_ManualCompletionWithoutPolicy(t *testing.T) {
 	require.NotNil(t, storeClient.statusWriter.capturedCluster)
 	status := storeClient.statusWriter.capturedCluster.Status
 	require.Equal(t, targetSourceCustomer, status.ControlPlaneUpgrade.TargetSource)
-	require.NotNil(t, status.ControlPlaneUpgrade.CompletedAt)
+	require.NotNil(t, status.ControlPlaneUpgrade.CompletedTime)
 	require.Equal(t, metav1.ConditionFalse, meta.FindStatusCondition(status.Conditions, conditionProgressing).Status)
 }
 
 func TestReconcile_ManualCompletionWithStaleDesiredVersion(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.1", []string{"4.15.2"})
+	cluster := readyCluster("4.15.1", []string{"4.15.2"})
 	cluster.Status.HostedClusterResult.DesiredVersion = "4.15.0"
 	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: "4.15.1", TargetSource: targetSourceCustomer,
@@ -862,12 +862,12 @@ func TestReconcile_ManualCompletionWithStaleDesiredVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, storeClient.statusWriter)
 	require.NotNil(t, storeClient.statusWriter.capturedCluster)
-	require.NotNil(t, storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.CompletedAt)
+	require.NotNil(t, storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.CompletedTime)
 	require.Equal(t, "4.15.1", storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.TargetVersion)
 }
 
 func TestReconcile_AcceptedManualRequestRestoresTargetSource(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Spec.Release.Version = "4.15.1"
 	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: "4.15.1", TargetSource: targetSourceAutomatic,
@@ -888,7 +888,7 @@ func TestReconcile_AcceptedManualRequestRestoresTargetSource(t *testing.T) {
 }
 
 func TestReconcile_DoesNotAcceptSecondManualRequestForActiveTarget(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Spec.Release.Version = "4.15.1"
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{
@@ -913,7 +913,7 @@ func TestReconcile_DoesNotAcceptSecondManualRequestForActiveTarget(t *testing.T)
 }
 
 func TestReconcile_ManualRequestNotAcceptedWhenClusterStatusConflicts(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Spec.Release.Version = "4.15.1"
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
@@ -931,7 +931,7 @@ func TestReconcile_ManualRequestNotAcceptedWhenClusterStatusConflicts(t *testing
 }
 
 func TestReconcile_ManualRequestBypassesMaintenancePolicy(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.policies = nil
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
@@ -950,7 +950,7 @@ func TestReconcile_ManualRequestBypassesMaintenancePolicy(t *testing.T) {
 }
 
 func TestReconcile_ManualVersionConflictLeavesRequestPending(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
 		ObjectMeta: metav1.ObjectMeta{Name: "request-1", Namespace: "hyperfleet"},
@@ -967,7 +967,7 @@ func TestReconcile_ManualVersionConflictLeavesRequestPending(t *testing.T) {
 }
 
 func TestReconcile_ManualRequestNoLongerAvailable(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.2"})
+	cluster := readyCluster("4.15.0", []string{"4.15.2"})
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
 		ObjectMeta: metav1.ObjectMeta{Name: "request-1", Namespace: "hyperfleet"},
@@ -983,7 +983,7 @@ func TestReconcile_ManualRequestNoLongerAvailable(t *testing.T) {
 }
 
 func TestReconcile_ManualRequestDuringAutomaticUpgrade(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.2"})
+	cluster := readyCluster("4.15.0", []string{"4.15.2"})
 	cluster.Spec.Release.Version = "4.15.1"
 	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.15.1", TargetSource: targetSourceAutomatic}
 	r, storeClient := buildReconciler(t, cluster)
@@ -1001,7 +1001,7 @@ func TestReconcile_ManualRequestDuringAutomaticUpgrade(t *testing.T) {
 }
 
 func TestReconcile_ManualRequestWaitsForHostedClusterHealth(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Status.HostedClusterResult.ObservedConditions = nil
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
@@ -1019,7 +1019,7 @@ func TestReconcile_ManualRequestWaitsForHostedClusterHealth(t *testing.T) {
 }
 
 func TestReconcile_ManualRequestAfterPatchRetainsCustomerSource(t *testing.T) {
-	cluster := readyCluster("cluster-1", "4.15.0", []string{"4.15.1"})
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
 	cluster.Spec.Release.Version = "4.15.1"
 	r, storeClient := buildReconciler(t, cluster)
 	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
