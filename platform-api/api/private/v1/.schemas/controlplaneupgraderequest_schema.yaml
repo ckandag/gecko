@@ -26,6 +26,7 @@ properties:
     properties:
       clusterID:
         description: ClusterID is the Cluster name in the same namespace.
+        maxLength: 253
         minLength: 1
         type: string
       targetVersion:
@@ -42,15 +43,17 @@ properties:
       ControlPlaneUpgradeRequestStatus records the controller's decision on this
       request. Rollout progress remains on Cluster.status.controlPlaneUpgrade.
     properties:
-      decidedAt:
+      decidedTime:
         format: date-time
         type: string
       decision:
         enum:
         - Accepted
         - Rejected
+        maxLength: 8
         type: string
       reason:
+        maxLength: 63
         type: string
     type: object
 required:

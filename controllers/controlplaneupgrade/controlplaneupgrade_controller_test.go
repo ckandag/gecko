@@ -1034,3 +1034,44 @@ func TestReconcile_ManualRequestAfterPatchRetainsCustomerSource(t *testing.T) {
 	require.Equal(t, "Accepted", storeClient.statusWriter.capturedRequest.Status.Decision)
 	require.Equal(t, targetSourceCustomer, storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.TargetSource)
 }
+
+func TestReconcile_ManualRequestRecoversAfterStatusWriteFailure(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	cluster.Spec.Release.Version = "4.15.1"
+	completed := metav1.Now()
+	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
+		TargetVersion: "4.15.0", TargetSource: targetSourceAutomatic, CompletedTime: &completed,
+	}
+	r, storeClient := buildReconciler(t, cluster)
+	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
+		ObjectMeta: metav1.ObjectMeta{Name: "request-1", Namespace: "hyperfleet"},
+		Spec:       privatev1.ControlPlaneUpgradeRequestSpec{ClusterID: "cluster-1", TargetVersion: "4.15.1"},
+	}}
+
+	_, err := r.Reconcile(context.Background(), clusterReq("cluster-1"))
+
+	require.NoError(t, err)
+	require.False(t, storeClient.updateCalled)
+	require.Equal(t, "Accepted", storeClient.statusWriter.capturedRequest.Status.Decision)
+	require.Equal(t, targetSourceCustomer, storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.TargetSource)
+	require.Equal(t, "4.15.1", storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.TargetVersion)
+}
+
+func TestReconcile_ManualRequestDoesNotClaimTrackedAutomaticTarget(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	cluster.Spec.Release.Version = "4.15.1"
+	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
+		TargetVersion: "4.15.1", TargetSource: targetSourceAutomatic,
+	}
+	r, storeClient := buildReconciler(t, cluster)
+	storeClient.requests = []privatev1.ControlPlaneUpgradeRequest{{
+		ObjectMeta: metav1.ObjectMeta{Name: "request-1", Namespace: "hyperfleet"},
+		Spec:       privatev1.ControlPlaneUpgradeRequestSpec{ClusterID: "cluster-1", TargetVersion: "4.15.1"},
+	}}
+
+	_, err := r.Reconcile(context.Background(), clusterReq("cluster-1"))
+
+	require.NoError(t, err)
+	require.Equal(t, "Rejected", storeClient.statusWriter.capturedRequest.Status.Decision)
+	require.Equal(t, targetSourceAutomatic, storeClient.statusWriter.capturedCluster.Status.ControlPlaneUpgrade.TargetSource)
+}

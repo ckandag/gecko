@@ -30,6 +30,7 @@ type ControlPlaneUpgradeRequestList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	// +orlop:public
+	// +kubebuilder:validation:MaxItems=10000
 	Items []ControlPlaneUpgradeRequest `json:"items"`
 }
 
@@ -39,6 +40,7 @@ type ControlPlaneUpgradeRequestSpec struct {
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	ClusterID string `json:"clusterID"`
 
 	// TargetVersion is an update advertised by the Cluster's HostedCluster.
@@ -55,13 +57,15 @@ type ControlPlaneUpgradeRequestStatus struct {
 	// +orlop:public
 	// +optional
 	// +kubebuilder:validation:Enum=Accepted;Rejected
+	// +kubebuilder:validation:MaxLength=8
 	Decision string `json:"decision,omitempty"`
 	// +orlop:public
 	// +optional
+	// +kubebuilder:validation:MaxLength=63
 	Reason string `json:"reason,omitempty"`
 	// +orlop:public
 	// +optional
-	DecidedAt *metav1.Time `json:"decidedAt,omitempty"`
+	DecidedTime *metav1.Time `json:"decidedTime,omitempty"`
 }
 
 func init() {

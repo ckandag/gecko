@@ -392,10 +392,15 @@ func (r *Reconciler) reconcileActiveUpgrade(
 	for i := range requests {
 		request := &requests[i]
 		previous := cluster.Status.ControlPlaneUpgrade
-		// If the request is for the same target and is older than the previous request, accept it.
+		// The Cluster spec update can succeed even if recording the customer's
+		// target in status fails. A pending request matching an untracked target
+		// recovers that partially recorded manual upgrade on the next reconcile.
+		untracked := previous == nil || previous.TargetVersion != target
+		customerTracked := previous != nil && previous.TargetVersion == target &&
+			previous.TargetSource == targetSourceCustomer && previous.RequestedTime != nil &&
+			!request.CreationTimestamp.After(previous.RequestedTime.Time)
 		if !accepted && request.Spec.TargetVersion == target &&
-			(previous == nil || (previous.TargetSource == targetSourceCustomer &&
-				previous.RequestedTime != nil && !request.CreationTimestamp.After(previous.RequestedTime.Time))) {
+			(untracked || customerTracked) {
 			accepted = true
 			result.TargetSource = targetSourceCustomer
 			decisions = append(decisions, requestDecision{request, "Accepted", "UpgradeRequested"})
@@ -480,7 +485,7 @@ func (r *Reconciler) recordRequestDecision(ctx context.Context, request *private
 	request.Status.Decision = decision
 	request.Status.Reason = reason
 	now := metav1.Now()
-	request.Status.DecidedAt = &now
+	request.Status.DecidedTime = &now
 	if err := r.apiClient.Status().Update(ctx, request); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil
