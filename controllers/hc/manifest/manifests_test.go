@@ -173,6 +173,21 @@ func TestBuild_NoCPOAnnotationWhenEmpty(t *testing.T) {
 	require.False(t, hasCPO, "CPO annotation should not be set when CPOImage is empty")
 }
 
+func TestBuild_CleanupCloudResourcesAnnotation(t *testing.T) {
+	input := testInput()
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal(manifests[3], &obj))
+
+	meta := obj["metadata"].(map[string]any)
+	annotations := meta["annotations"].(map[string]any)
+	require.Equal(t, "true", annotations["hypershift.openshift.io/cleanup-cloud-resources"],
+		"HostedCluster must opt in to cloud resource cleanup on deletion")
+}
+
 func TestBuild_DefaultEndpointAccess(t *testing.T) {
 	input := testInput()
 	input.GCPEndpointAccess = "" // should default to "Private"

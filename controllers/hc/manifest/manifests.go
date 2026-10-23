@@ -245,6 +245,9 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 		"gcp.managed.openshift.io/generation":                           genStr,
 		"hypershift.openshift.io/pod-security-admission-label-override": "baseline",
 		"hypershift.openshift.io/skip-kas-conflict-san-validation":      "true",
+		// Inert until the HostedCluster is deleted, when HyperShift reclaims
+		// guest cloud resources instead of leaving them behind.
+		"hypershift.openshift.io/cleanup-cloud-resources": "true",
 	}
 	if input.CPOImage != "" {
 		annotations["hypershift.openshift.io/control-plane-operator-image"] = input.CPOImage
