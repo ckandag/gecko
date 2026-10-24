@@ -152,7 +152,7 @@ gateway:
 # with the required IAM role.
 esp:
   enabled: true
-  image: gcr.io/endpoints-release/endpoints-runtime:2.57.0
+  image: gcr.io/endpoints-release/endpoints-runtime:2.57.1
   port: 9080
   serviceName: ""
 
