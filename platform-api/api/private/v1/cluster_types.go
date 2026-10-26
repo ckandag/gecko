@@ -542,6 +542,11 @@ type ClusterStatus struct {
 	// Not exposed on the public API.
 	// +optional
 	VersionResolution *VersionResolutionResult `json:"versionResolution,omitempty"`
+
+	// ControlPlaneUpgrade is written by the control-plane-upgrade controller.
+	// +orlop:public
+	// +optional
+	ControlPlaneUpgrade *ControlPlaneUpgradeResult `json:"controlPlaneUpgrade,omitempty"`
 }
 
 // PlacementResult holds the placement controller's output.
@@ -579,6 +584,63 @@ type HostedClusterResult struct {
 	// +orlop:public
 	// +optional
 	Version string `json:"version,omitempty"`
+	// DesiredVersion is the release currently requested by the HostedCluster.
+	// This is private HC feedback used by Gecko controllers.
+	// +optional
+	DesiredVersion string `json:"desiredVersion,omitempty"`
+	// AvailableUpdates are the update targets advertised by HyperShift for the
+	// HostedCluster's configured release channel. This is private HC feedback
+	// used by Gecko controllers.
+	// +optional
+	// +listType=set
+	AvailableUpdates []string `json:"availableUpdates,omitempty"`
+	// ObservedConditions are HyperShift/CVO upgrade-readiness conditions normalized
+	// by the hc-controller from raw HostedCluster feedback. This field is recalculated
+	// in full on every reconciliation; a condition type absent from HostedCluster
+	// feedback is omitted rather than left stale. Consumers should treat an absent
+	// condition as unknown. This is private HC feedback used by Gecko controllers and is
+	// intentionally not exposed on the public API — see ControlPlaneUpgradeResult for
+	// the customer-facing upgrade conditions derived from this data.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	ObservedConditions []metav1.Condition `json:"observedConditions,omitempty"`
+}
+
+// ControlPlaneUpgradeResult holds the control-plane-upgrade controller's decision
+// state. This field is read-only — populated by the control-plane-upgrade
+// controller only. The controller reads HostedClusterResult for feedback but
+// never writes it.
+type ControlPlaneUpgradeResult struct {
+	// TargetVersion is the control-plane version currently selected or requested.
+	// +orlop:public
+	// +optional
+	TargetVersion string `json:"targetVersion,omitempty"`
+	// TargetSource records whether TargetVersion was selected automatically or
+	// requested by the customer.
+	// +orlop:public
+	// +optional
+	// +kubebuilder:validation:Enum=automatic;customer
+	TargetSource string `json:"targetSource,omitempty"`
+	// RequestedTime is when the control-plane-upgrade controller selected or
+	// requested TargetVersion. It does not indicate that HyperShift has
+	// accepted or begun rolling it out; ControlPlaneUpgradeProgressing reports
+	// that separately.
+	// +orlop:public
+	// +optional
+	RequestedTime *metav1.Time `json:"requestedTime,omitempty"`
+	// CompletedTime is when TargetVersion completed successfully.
+	// +orlop:public
+	// +optional
+	CompletedTime *metav1.Time `json:"completedTime,omitempty"`
+	// FailureReason is set when the upgrade to TargetVersion failed or stalled.
+	// +orlop:public
+	// +optional
+	FailureReason string `json:"failureReason,omitempty"`
+	// FailureMessage is set when the upgrade to TargetVersion failed or stalled.
+	// +orlop:public
+	// +optional
+	FailureMessage string `json:"failureMessage,omitempty"`
 }
 
 func init() { register(&Cluster{}, &ClusterList{}) }

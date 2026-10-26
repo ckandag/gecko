@@ -6,22 +6,20 @@ import (
 	"strings"
 	"time"
 
+	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const (
-	adapterName         = "version-resolution-controller"
-	defaultChannelGroup = "candidate"
-	requeueStable       = 5 * time.Minute
-)
+const requeueStable = 5 * time.Minute
 
 // Reconciler resolves the OCP release image for a cluster via Cincinnati.
 type Reconciler struct {
@@ -69,21 +67,40 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	version := cluster.Spec.Release.Version
 
-	channelGroup := defaultChannelGroup
+	channelGroup := channelutil.DefaultChannelGroup
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
 	}
-	channel, err := buildChannel(version, channelGroup)
+
+	channelVersion := version
+	var platformChannel privatev1.Channel
+	if err := r.client.Get(ctx, client.ObjectKey{Name: channelGroup}, &platformChannel); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("vr: get channel %s for cluster %s: %w", channelGroup, clusterID, err)
+		}
+		r.log.Infof(ctx, "vr: channel %s not found, resolving cluster %s in its current minor channel", channelGroup, clusterID)
+	} else {
+		// TODO: Revisit whether version-resolution should advance the concrete
+		// channel directly when progressive rollout adds per-cluster admission.
+		channelVersion, err = nextChannelVersion(version, platformChannel.Spec.FleetMinorVersion)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("vr: select channel version for cluster %s: %w", clusterID, err)
+		}
+	}
+
+	channel, err := buildChannel(channelVersion, channelGroup)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("vr: build channel for cluster %s: %w", clusterID, err)
 	}
 
-	// Check already resolved — both version and channel group must match to skip re-resolution.
+	// Check already resolved — version, channel group, and concrete Cincinnati
+	// channel must all match to skip re-resolution.
 	if vr := cluster.Status.VersionResolution; vr != nil &&
 		vr.ReleaseVersion == version &&
-		vr.ChannelGroup == channelGroup {
-		r.log.Infof(ctx, "vr: cluster %s: version %s channel %s already resolved, waiting for next event", clusterID, version, channelGroup)
-		return reconcile.Result{}, nil
+		vr.ChannelGroup == channelGroup &&
+		vr.CincinnatiChannel == channel {
+		r.log.Infof(ctx, "vr: cluster %s: version %s channel %s already resolved, checking again later", clusterID, version, channelGroup)
+		return reconcile.Result{RequeueAfter: requeueStable}, nil
 	}
 	r.log.Infof(ctx, "vr: cluster %s: resolving version %s via channel %s", clusterID, version, channel)
 
@@ -92,7 +109,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("vr: cincinnati resolve for cluster %s: %w", clusterID, err)
 	}
 	if info == nil {
-		r.log.Warnf(ctx, "vr: cluster %s: version %s not found in Cincinnati, waiting for next event", clusterID, version)
+		r.log.Warnf(ctx, "vr: cluster %s: version %s not found in Cincinnati, retrying later", clusterID, version)
 		if meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "VersionResolved",
 			Status:             metav1.ConditionFalse,
@@ -104,7 +121,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: requeueStable}, nil
 	}
 
 	// Write VR result and VersionResolved condition to status.
@@ -140,4 +157,28 @@ func buildChannel(version, channelGroup string) (string, error) {
 		return "", fmt.Errorf("invalid version %q: expected at least major.minor", version)
 	}
 	return fmt.Sprintf("%s-%s.%s", channelGroup, parts[0], parts[1]), nil
+}
+
+// nextChannelVersion returns a version in the minor channel that CVO should
+// query. Minor upgrades are exposed one at a time even when the fleet minor is
+// more than one release ahead of the cluster.
+func nextChannelVersion(version, fleetMinorVersion string) (string, error) {
+	if fleetMinorVersion == "" {
+		return version, nil
+	}
+
+	current, err := utilversion.ParseSemantic(version)
+	if err != nil {
+		return "", fmt.Errorf("parse current version %q: %w", version, err)
+	}
+	fleetMinor, err := utilversion.ParseSemantic(fleetMinorVersion + ".0")
+	if err != nil {
+		return "", fmt.Errorf("parse fleet minor version %q: %w", fleetMinorVersion, err)
+	}
+
+	if current.Major() != fleetMinor.Major() || current.Minor() >= fleetMinor.Minor() {
+		return version, nil
+	}
+
+	return fmt.Sprintf("%d.%d.0", current.Major(), current.Minor()+1), nil
 }

@@ -59,24 +59,32 @@ func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration
 // mockStoreClient is a minimal client.Client backed by a fixed Cluster.
 type mockStoreClient struct {
 	cluster      *privatev1.Cluster
+	channel      *privatev1.Channel
 	getErr       error
 	updateCalled bool
 	statusWriter *mockStatusWriter
 }
 
-func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
 	if m.getErr != nil {
 		return m.getErr
 	}
-	if m.cluster == nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
-	}
-	c, ok := obj.(*privatev1.Cluster)
-	if !ok {
+	switch typed := obj.(type) {
+	case *privatev1.Cluster:
+		if m.cluster == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, key.Name)
+		}
+		*typed = *m.cluster
+		return nil
+	case *privatev1.Channel:
+		if m.channel == nil || m.channel.Name != key.Name {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "channel"}, key.Name)
+		}
+		*typed = *m.channel
+		return nil
+	default:
 		return fmt.Errorf("unexpected type %T", obj)
 	}
-	*c = *m.cluster
-	return nil
 }
 
 func (m *mockStoreClient) Update(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
@@ -117,16 +125,14 @@ func (m *mockStoreClient) GroupVersionKindFor(_ runtime.Object) (schema.GroupVer
 }
 func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { return false, nil }
 
-// newMockCincinnati builds a simple httptest server that returns a Cincinnati
-// graph containing the given release, or an empty graph if release is nil.
-func newMockCincinnati(release *ReleaseInfo) *httptest.Server {
+// newMockCincinnati builds a simple httptest server that returns an empty graph.
+func newMockCincinnati(t *testing.T) *httptest.Server {
+	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		graph := CincinnatiGraph{}
-		if release != nil {
-			graph.Nodes = []ReleaseInfo{*release}
-		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(graph) //nolint:errcheck
+		if err := json.NewEncoder(w).Encode(CincinnatiGraph{}); err != nil {
+			t.Errorf("encode Cincinnati graph: %v", err)
+		}
 	}))
 }
 
@@ -156,7 +162,14 @@ func TestReconciler_HappyPath(t *testing.T) {
 		Version: "4.22.0-ec.4",
 		Payload: "quay.io/openshift-release-dev/ocp-release:4.22.0-ec.4-x86_64",
 	}
-	cincSrv := newMockCincinnati(release)
+	requestedChannel := make(chan string, 1)
+	cincSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedChannel <- r.URL.Query().Get("channel")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(CincinnatiGraph{Nodes: []ReleaseInfo{*release}}); err != nil {
+			t.Errorf("encode Cincinnati graph: %v", err)
+		}
+	}))
 	defer cincSrv.Close()
 
 	cluster := &privatev1.Cluster{}
@@ -174,10 +187,11 @@ func TestReconciler_HappyPath(t *testing.T) {
 	require.False(t, storeClient.updateCalled, "expected no spec Update (result written to status)")
 	require.NotNil(t, storeClient.statusWriter)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
+	require.Equal(t, "stable-4.22", <-requestedChannel)
 }
 
 func TestReconciler_AlreadyResolved(t *testing.T) {
-	cincSrv := newMockCincinnati(nil)
+	cincSrv := newMockCincinnati(t)
 	defer cincSrv.Close()
 
 	cluster := &privatev1.Cluster{}
@@ -187,7 +201,8 @@ func TestReconciler_AlreadyResolved(t *testing.T) {
 	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{
 		ReleaseImage:      "quay.io/openshift-release-dev/ocp-release:4.22.0-ec.4-x86_64",
 		ReleaseVersion:    "4.22.0-ec.4",
-		CincinnatiChannel: "candidate-4.22",
+		CincinnatiChannel: "stable-4.22",
+		ChannelGroup:      "stable",
 	}
 
 	r, storeClient := buildReconciler(t, cluster, cincSrv)
@@ -195,12 +210,44 @@ func TestReconciler_AlreadyResolved(t *testing.T) {
 	result, err := r.Reconcile(context.Background(), clusterReq("cluster-2"))
 
 	require.NoError(t, err)
-	require.Equal(t, reconcile.Result{}, result)
+	require.Equal(t, reconcile.Result{RequeueAfter: requeueStable}, result)
 	require.False(t, storeClient.updateCalled, "expected no spec Update")
 }
 
+func TestReconciler_FleetMinorAdvancesCincinnatiChannel(t *testing.T) {
+	requestedChannel := make(chan string, 1)
+	cincSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedChannel <- r.URL.Query().Get("channel")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(CincinnatiGraph{Nodes: []ReleaseInfo{{
+			Version: "4.22.14",
+			Payload: "quay.io/openshift-release-dev/ocp-release:4.22.14-x86_64",
+		}}}); err != nil {
+			t.Errorf("encode Cincinnati graph: %v", err)
+		}
+	}))
+	defer cincSrv.Close()
+
+	cluster := &privatev1.Cluster{}
+	cluster.SetName("cluster-ystream")
+	cluster.SetNamespace("hyperfleet")
+	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "candidate"}
+
+	channel := &privatev1.Channel{}
+	channel.SetName("candidate")
+	channel.Spec.FleetMinorVersion = "4.23"
+
+	storeClient := &mockStoreClient{cluster: cluster, channel: channel}
+	r := NewReconciler(NewCincinnatiClient(cincSrv.URL, "amd64"), newTestLogger(t), storeClient)
+
+	_, err := r.Reconcile(context.Background(), clusterReq("cluster-ystream"))
+
+	require.NoError(t, err)
+	require.Equal(t, "candidate-4.23", <-requestedChannel)
+}
+
 func TestReconciler_ClusterNotFound(t *testing.T) {
-	cincSrv := newMockCincinnati(nil)
+	cincSrv := newMockCincinnati(t)
 	defer cincSrv.Close()
 
 	r, _ := buildReconciler(t, nil, cincSrv) // nil cluster → NotFound
@@ -212,7 +259,7 @@ func TestReconciler_ClusterNotFound(t *testing.T) {
 }
 
 func TestReconciler_VersionNotSet(t *testing.T) {
-	cincSrv := newMockCincinnati(nil)
+	cincSrv := newMockCincinnati(t)
 	defer cincSrv.Close()
 
 	cluster := &privatev1.Cluster{}
@@ -231,7 +278,7 @@ func TestReconciler_VersionNotSet(t *testing.T) {
 
 func TestReconciler_VersionNotInCincinnati(t *testing.T) {
 	// Cincinnati returns an empty graph (no matching node).
-	cincSrv := newMockCincinnati(nil)
+	cincSrv := newMockCincinnati(t)
 	defer cincSrv.Close()
 
 	cluster := &privatev1.Cluster{}
@@ -244,7 +291,29 @@ func TestReconciler_VersionNotInCincinnati(t *testing.T) {
 	result, err := r.Reconcile(context.Background(), clusterReq("cluster-5"))
 
 	require.NoError(t, err)
-	require.Equal(t, reconcile.Result{}, result)
+	require.Equal(t, reconcile.Result{RequeueAfter: requeueStable}, result)
+	require.False(t, storeClient.updateCalled)
+}
+
+func TestReconciler_CurrentVersionMissingFromAdvancedChannelRetries(t *testing.T) {
+	cincSrv := newMockCincinnati(t)
+	defer cincSrv.Close()
+
+	cluster := &privatev1.Cluster{}
+	cluster.SetName("cluster-advanced")
+	cluster.SetNamespace("hyperfleet")
+	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "candidate"}
+
+	r, storeClient := buildReconciler(t, cluster, cincSrv)
+	storeClient.channel = &privatev1.Channel{}
+	storeClient.channel.Name = "candidate"
+	storeClient.channel.Spec.FleetMinorVersion = "4.23"
+
+	result, err := r.Reconcile(context.Background(), clusterReq("cluster-advanced"))
+
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{RequeueAfter: requeueStable}, result)
+	require.True(t, storeClient.statusWriter.called)
 	require.False(t, storeClient.updateCalled)
 }
 
@@ -269,6 +338,28 @@ func TestBuildChannel(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got)
 			}
+		})
+	}
+}
+
+func TestNextChannelVersion(t *testing.T) {
+	cases := []struct {
+		name       string
+		version    string
+		fleetMinor string
+		want       string
+	}{
+		{name: "same minor", version: "4.22.14", fleetMinor: "4.22", want: "4.22.14"},
+		{name: "next minor", version: "4.22.14", fleetMinor: "4.23", want: "4.23.0"},
+		{name: "one minor at a time", version: "4.22.14", fleetMinor: "4.24", want: "4.23.0"},
+		{name: "different major", version: "4.22.14", fleetMinor: "5.0", want: "4.22.14"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := nextChannelVersion(tc.version, tc.fleetMinor)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

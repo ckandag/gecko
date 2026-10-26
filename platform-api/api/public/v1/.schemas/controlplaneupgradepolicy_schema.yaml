@@ -55,6 +55,8 @@ properties:
         properties:
           durationMinutes:
             format: int32
+            maximum: 1440
+            minimum: 1
             type: integer
           recurrence:
             description: ControlPlaneMaintenanceRecurrence describes how a maintenance

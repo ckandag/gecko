@@ -626,14 +626,23 @@ func TestReconcile_UsesClusterUIDForHostedClusterIdentity(t *testing.T) {
 	require.Equal(t, clusterUID, spec["clusterID"])
 }
 
-// TestReconcile_HCFeedback_SetsHostedClusterResult verifies that controlPlaneEndpoint and
-// version fields from HC status feedback are written to cluster.Status.HostedClusterResult.
+// TestReconcile_HCFeedback_SetsHostedClusterResult verifies that HostedCluster
+// version feedback and upgrade conditions are written to Cluster status, and that
+// the HyperShift/CVO conditions land verbatim in the private ObservedConditions
+// field rather than the public Status.Conditions list.
 func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
 	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
+	availableUpdates, err := json.Marshal([]string{"4.15.1", "4.16.0"})
+	require.NoError(t, err)
+	versionConditions, err := json.Marshal([]metav1.Condition{
+		{Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue, Reason: "AsExpected"},
+		{Type: "Degraded", Status: metav1.ConditionFalse, Reason: "AsExpected"},
+	})
+	require.NoError(t, err)
 
 	tr := mock.New()
 	hcKey := hostedClusterResourceKey(cluster)
@@ -646,6 +655,9 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 				"availableCondition":   "True",
 				"controlPlaneEndpoint": "api.my-cluster-user.example.com",
 				"version":              "4.15.0",
+				"desiredVersion":       "4.15.1",
+				"availableVersions":    string(availableUpdates),
+				"versionConditions":    string(versionConditions),
 			},
 		},
 	}
@@ -661,6 +673,144 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	require.NotNil(t, captured.Status.HostedClusterResult)
 	require.Equal(t, "api.my-cluster-user.example.com", captured.Status.HostedClusterResult.APIEndpoint)
 	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version)
+	require.Equal(t, "4.15.1", captured.Status.HostedClusterResult.DesiredVersion)
+	require.Equal(t, []string{"4.15.1", "4.16.0"}, captured.Status.HostedClusterResult.AvailableUpdates)
+
+	observed := captured.Status.HostedClusterResult.ObservedConditions
+	require.Len(t, observed, 2, "only the reported conditions are mirrored, nothing is synthesized")
+	require.Equal(t, metav1.ConditionTrue, meta.FindStatusCondition(observed, "ClusterVersionUpgradeable").Status)
+	require.Equal(t, metav1.ConditionFalse, meta.FindStatusCondition(observed, "HostedClusterDegraded").Status)
+	// Not reported by this feedback, and must not be synthesized as a placeholder.
+	require.Nil(t, meta.FindStatusCondition(observed, "ClusterVersionProgressing"))
+
+	// The raw HyperShift/CVO conditions must never appear on the public condition list.
+	require.Nil(t, meta.FindStatusCondition(captured.Status.Conditions, "ClusterVersionUpgradeable"))
+	require.Nil(t, meta.FindStatusCondition(captured.Status.Conditions, "HostedClusterDegraded"))
+}
+
+// TestReconcile_HCFeedback_MissingConditionsAreAbsent verifies that a
+// previously-observed condition type not present in the latest feedback is simply
+// absent from ObservedConditions afterward — never removed-but-remembered, never
+// left at its old value. A consumer that needs that type and finds it absent must
+// treat that itself as Unknown.
+func TestReconcile_HCFeedback_MissingConditionsAreAbsent(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
+		Version: "4.15.0",
+		ObservedConditions: []metav1.Condition{
+			{Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+		},
+	}
+
+	tr := mock.New()
+	hcKey := hostedClusterResourceKey(cluster)
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {
+				"availableCondition": "True",
+				"version":            "4.15.0",
+				"versionConditions":  "[]",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.True(t, storeClient.statusWriter.called)
+	captured := storeClient.statusWriter.captured.(*privatev1.Cluster)
+
+	require.Empty(t, captured.Status.HostedClusterResult.ObservedConditions)
+}
+
+// TestReconcile_HCFeedback_MissingEntirely_PreservesVersionClearsConditions
+// verifies that when the HostedCluster resource disappears from feedback entirely
+// (e.g. a transient transport gap), the last observed Version/APIEndpoint stay
+// sticky, while ObservedConditions is cleared rather than carried forward — stale
+// health signals must never be trusted just because feedback stopped arriving.
+func TestReconcile_HCFeedback_MissingEntirely_PreservesVersionClearsConditions(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
+		APIEndpoint: "api.my-cluster-user.example.com",
+		Version:     "4.15.0",
+		ObservedConditions: []metav1.Condition{
+			{Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+		},
+	}
+
+	tr := mock.New()
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
+		},
+		ResourceStatuses: map[string]map[string]string{},
+	}
+
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.True(t, storeClient.statusWriter.called)
+	captured := storeClient.statusWriter.captured.(*privatev1.Cluster)
+
+	require.Equal(t, "api.my-cluster-user.example.com", captured.Status.HostedClusterResult.APIEndpoint)
+	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version)
+	require.Empty(t, captured.Status.HostedClusterResult.ObservedConditions)
+}
+
+// TestReconcile_HCFeedback_PresentButEmpty_PreservesStickyFields is a regression
+// test for a resource-status entry that exists but is empty because the
+// HostedCluster's live content has not synced yet (KubeContent nil) — a different
+// condition from a Read status document never arriving at all (which mwStatus.Stale
+// already covers). Map-key presence alone must not be treated as fresh feedback.
+func TestReconcile_HCFeedback_PresentButEmpty_PreservesStickyFields(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
+		APIEndpoint:      "api.my-cluster-user.example.com",
+		Version:          "4.15.0",
+		DesiredVersion:   "4.15.0",
+		AvailableUpdates: []string{"4.15.1"},
+	}
+
+	tr := mock.New()
+	hcKey := hostedClusterResourceKey(cluster)
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {}, // present, but empty — KubeContent has not synced yet
+		},
+	}
+
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.True(t, storeClient.statusWriter.called)
+	captured := storeClient.statusWriter.captured.(*privatev1.Cluster)
+
+	require.Equal(t, "api.my-cluster-user.example.com", captured.Status.HostedClusterResult.APIEndpoint,
+		"must not clear APIEndpoint just because this resource-status entry is empty")
+	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version,
+		"must not clear Version just because this resource-status entry is empty")
+	require.Equal(t, []string{"4.15.1"}, captured.Status.HostedClusterResult.AvailableUpdates)
 }
 
 // TestReconcile_CreatedByAnnotationPropagated verifies that the created-by annotation

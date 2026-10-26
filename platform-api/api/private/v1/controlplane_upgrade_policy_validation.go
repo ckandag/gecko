@@ -44,8 +44,8 @@ func (p *ControlPlaneUpgradePolicy) ValidateDelete(_ context.Context) error {
 
 func (p *ControlPlaneUpgradePolicy) validate() error {
 	if window := p.Spec.MaintenanceWindow; window != nil {
-		if window.DurationMinutes <= 0 {
-			return fmt.Errorf("spec.maintenanceWindow.durationMinutes must be greater than zero")
+		if window.DurationMinutes < 1 || window.DurationMinutes > 1440 {
+			return fmt.Errorf("spec.maintenanceWindow.durationMinutes must be between 1 and 1440")
 		}
 		if window.Recurrence.Frequency != "weekly" {
 			return fmt.Errorf("spec.maintenanceWindow.recurrence.frequency must be weekly")

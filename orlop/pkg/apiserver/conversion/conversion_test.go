@@ -559,6 +559,34 @@ func TestConverter_FilterNonPublicConditions(t *testing.T) {
 			},
 		},
 		{
+			name: "keeps customer-facing control-plane upgrade conditions for Cluster",
+			kind: "Cluster",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "HostedClusterAvailable", "status": "True"},
+						map[string]interface{}{"type": "ControlPlaneUpgradeAvailable", "status": "True"},
+						map[string]interface{}{"type": "ControlPlaneUpgradeProgressing", "status": "False"},
+						map[string]interface{}{"type": "ControlPlaneUpgradeDegraded", "status": "False"},
+						map[string]interface{}{"type": "ResourcesApplied", "status": "True"},
+					},
+				}),
+			),
+			validate: func(t *testing.T, obj *unstructured.Unstructured) {
+				status := obj.Object["status"].(map[string]interface{})
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 4 {
+					t.Fatalf("Expected 4 public conditions, got %d", len(conditions))
+				}
+				for _, condition := range conditions {
+					conditionType := condition.(map[string]interface{})["type"].(string)
+					if conditionType == "ResourcesApplied" {
+						t.Error("ResourcesApplied should remain private")
+					}
+				}
+			},
+		},
+		{
 			name: "keeps only public conditions for NodePool (object array)",
 			kind: "NodePool",
 			obj: newTestObject(

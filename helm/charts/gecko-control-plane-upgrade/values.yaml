@@ -1,0 +1,59 @@
+replicaCount: 1
+
+image:
+  registry: us-docker.pkg.dev
+  repository: gcp-hcp-commons/gcp-hcp-images/gecko-controllers
+  tag: ""
+  pullPolicy: Always
+
+nameOverride: ""
+fullnameOverride: ""
+
+orlopURL: ""
+logLevel: info
+logFormat: json
+workers: 10
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+strategy:
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  type: RollingUpdate
+
+podSecurityContext:
+  fsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}
+imagePullSecrets: []
