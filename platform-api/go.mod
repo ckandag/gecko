@@ -107,8 +107,8 @@ require (
 	github.com/twmb/murmur3 v1.2.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.7.3 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.7.2 // indirect
-	go.etcd.io/etcd/client/v3 v3.7.2 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.7.3 // indirect
+	go.etcd.io/etcd/client/v3 v3.7.3 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.47.0 // indirect
