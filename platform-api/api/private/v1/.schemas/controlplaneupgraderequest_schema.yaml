@@ -44,15 +44,23 @@ properties:
       request. Rollout progress remains on Cluster.status.controlPlaneUpgrade.
     properties:
       decidedTime:
+        description: decidedTime is when the decision was recorded.
         format: date-time
         type: string
       decision:
+        description: |-
+          decision is the outcome of the request: Accepted or Rejected. It is omitted
+          while the request is awaiting a decision.
         enum:
         - Accepted
         - Rejected
         maxLength: 8
         type: string
       reason:
+        description: |-
+          reason is a short code explaining the decision, such as UpgradeRequested
+          for an accepted request, or UpgradeInProgress or TargetNotAvailable for a
+          rejected request.
         maxLength: 63
         type: string
     type: object
