@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	cloud.google.com/go/firestore v1.29.0
-	cloud.google.com/go/secretmanager v1.22.0
+	cloud.google.com/go/secretmanager v1.23.0
 	github.com/go-logr/logr v1.4.4
 	github.com/openshift-online/gecko/platform-api v0.0.0-00010101000000-000000000000
 	github.com/openshift-online/kube-applier-gcp v0.0.0-20260903184437-a0a17126d22a
