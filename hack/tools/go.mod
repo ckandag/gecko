@@ -213,7 +213,7 @@ require (
 	honnef.co/go/tools v0.8.2 // indirect
 	k8s.io/apimachinery v0.37.1 // indirect
 	k8s.io/gengo/v2 v2.0.0-20260408192533-25e2208e0dc3 // indirect
-	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab // indirect
 	mvdan.cc/gofumpt v0.12.0 // indirect
 	mvdan.cc/unparam v0.0.0-20261011093844-7a2c2c0b7aa6 // indirect
 	sigs.k8s.io/kube-api-linter v0.0.0-20261012124120-79b557aa8c8d // indirect
