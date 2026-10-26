@@ -24,7 +24,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
 	cloud.google.com/go/iam v1.15.0 // indirect
-	cloud.google.com/go/longrunning v1.3.0 // indirect
+	cloud.google.com/go/longrunning v1.4.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cedar-policy/cedar-go v1.8.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
