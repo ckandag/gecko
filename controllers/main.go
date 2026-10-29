@@ -14,6 +14,7 @@ import (
 	cmdnodepool "github.com/openshift-online/gecko/controllers/cmd/nodepool"
 	cmdnodepoolvrresolution "github.com/openshift-online/gecko/controllers/cmd/nodepoolvrresolution"
 	cmdplacement "github.com/openshift-online/gecko/controllers/cmd/placement"
+	cmdreplication "github.com/openshift-online/gecko/controllers/cmd/replication"
 	cmdversionresolution "github.com/openshift-online/gecko/controllers/cmd/versionresolution"
 	cmdversionsync "github.com/openshift-online/gecko/controllers/cmd/versionsync"
 	"github.com/openshift-online/gecko/controllers/util/setup"
@@ -55,6 +56,7 @@ func main() {
 		cmdversionresolution.NewCommand(rf),
 		cmdnodepoolvrresolution.NewCommand(rf),
 		cmdplacement.NewCommand(rf),
+		cmdreplication.NewCommand(rf),
 		cmdhc.NewCommand(rf),
 		cmdnodepool.NewCommand(rf),
 		cmdcontrolplaneupgrade.NewCommand(rf),

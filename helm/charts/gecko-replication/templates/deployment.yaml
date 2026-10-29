@@ -1,0 +1,87 @@
+{{- include "gecko-replication.validateValues" . }}
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gecko-replication.fullname" . }}
+  labels:
+    {{- include "gecko-replication.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Avoid overlapping follower processes while local delete ordering is kept
+  # in memory. Pub/Sub retains messages during the replacement.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gecko-replication
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gecko-replication
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "gecko-replication.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: replication
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - replication
+            - --region={{ .Values.region }}
+            - --leader-region={{ .Values.leaderRegion }}
+            - --leader-generation={{ .Values.leaderGeneration }}
+            - --pubsub-project={{ .Values.pubsub.projectId }}
+            - --pubsub-topic={{ .Values.pubsub.dataTopic }}
+            - --pubsub-subscription=projects/{{ .Values.identity.projectId }}/subscriptions/{{ .Values.pubsub.dataSubscription }}
+            - --pubsub-control-topic={{ .Values.pubsub.controlTopic }}
+            - --pubsub-control-subscription=projects/{{ .Values.identity.projectId }}/subscriptions/{{ .Values.pubsub.controlSubscription }}
+            - --replicate={{ .Values.replicate }}
+            - --resync-interval={{ .Values.resyncInterval }}
+            - --capture-max-bytes={{ int .Values.captureMaxBytes }}
+            - --log-level={{ .Values.logLevel }}
+            - --log-format={{ .Values.logFormat }}
+            {{- if .Values.orlopURL }}
+            - --orlop-url={{ .Values.orlopURL }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

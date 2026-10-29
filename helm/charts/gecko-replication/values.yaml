@@ -1,0 +1,65 @@
+# Enable only after the regional API LIST/WATCH contract and Pub/Sub resources
+# have been verified for this environment. The first-stage follower relies on
+# periodic snapshots to repair stale post-delete deliveries; durable delete
+# ordering is follow-up work before authorization replication is production-ready.
+# Enable follower public/private write guards before enabling consumption.
+enabled: false
+
+region: ""
+leaderRegion: ""
+leaderGeneration: 0
+replicate: roles.gcp.managed.openshift.io,rolebindings.gcp.managed.openshift.io
+resyncInterval: 30m
+# Maximum encoded bytes buffered in memory during one full snapshot capture.
+# Keep this well below resources.limits.memory below: the controller holds the
+# encoded snapshot plus Go runtime overhead while capturing. Default 32 MiB.
+captureMaxBytes: 33554432
+
+pubsub:
+  projectId: ""
+  dataTopic: resource-replication
+  controlTopic: resource-replication-control
+  # Each region owns a subscription attached to the shared data topic.
+  dataSubscription: ""
+  controlSubscription: ""
+  # Exactly one deployment owns the shared topics, regardless of leader mode.
+  topicOwner: false
+
+identity:
+  # This region's project and its unique GCP service account ID (6-30 chars).
+  projectId: ""
+  accountId: ""
+  # Defaults to projectId; set when the cluster's workload pool uses another project.
+  workloadPoolProjectId: ""
+
+image:
+  registry: us-docker.pkg.dev
+  repository: gcp-hcp-commons/gcp-hcp-images/gecko-controllers
+  tag: ""
+  pullPolicy: Always
+
+# Until durable per-key ordering exists, run one receiver per regional subscription.
+replicaCount: 1
+logLevel: info
+logFormat: json
+orlopURL: ""
+
+serviceAccount:
+  name: ""
+
+resources:
+  limits:
+    cpu: 500m
+    # Must comfortably exceed captureMaxBytes (the in-memory snapshot) plus Go
+    # runtime overhead to avoid OOMKills during a full capture.
+    memory: 512Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+imagePullSecrets: []

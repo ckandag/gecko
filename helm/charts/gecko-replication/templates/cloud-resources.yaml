@@ -1,0 +1,149 @@
+{{- if .Values.enabled }}
+{{- $name := include "gecko-replication.fullname" . -}}
+{{- $gsa := include "gecko-replication.gcpServiceAccount" . -}}
+{{- $workloadPool := default .Values.identity.projectId .Values.identity.workloadPoolProjectId -}}
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMServiceAccount
+metadata:
+  name: {{ $name }}-gsa
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  resourceID: {{ .Values.identity.accountId | quote }}
+  displayName: Gecko Replication Controller {{ .Values.region }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-workload-identity
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s.svc.id.goog[%s/%s]" $workloadPool .Release.Namespace (include "gecko-replication.serviceAccountName" .) | quote }}
+  role: roles/iam.workloadIdentityUser
+  resourceRef:
+    apiVersion: iam.cnrm.cloud.google.com/v1beta1
+    kind: IAMServiceAccount
+    name: {{ $name }}-gsa
+{{- if .Values.pubsub.topicOwner }}
+---
+# The owning deployment is chosen independently of leaderRegion.
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: {{ $name }}-data-topic
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.projectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.dataTopic | quote }}
+---
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: {{ $name }}-control-topic
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.projectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.controlTopic | quote }}
+{{- end }}
+---
+# Every region has its own data subscription. The leader consumes and skips its
+# own events; a promoted follower already has a subscription and backlog.
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubSubscription
+metadata:
+  name: {{ $name }}-data-subscription
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.dataSubscription | quote }}
+  # Keep the delivery window below the controller's eight-day invalid-ID cache.
+  messageRetentionDuration: "604800s"
+  expirationPolicy:
+    ttl: ""
+  retryPolicy:
+    minimumBackoff: "10s"
+    maximumBackoff: "600s"
+  topicRef:
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.projectId .Values.pubsub.dataTopic | quote }}
+---
+# Subscriber permission is attached to this regional subscription, not the
+# shared topic; Config Connector attaches it cross-project above.
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-data-subscriber
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.subscriber
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubSubscription
+    external: {{ printf "projects/%s/subscriptions/%s" .Values.identity.projectId .Values.pubsub.dataSubscription | quote }}
+---
+# Every region owns its control subscription in its own project, attached to the
+# shared-project control topic, ready for a later manual promotion. Config
+# Connector in this region's project needs pubsub.topics.attachSubscription on
+# the shared control topic (an infrastructure prerequisite granted outside this
+# chart, alongside KCC's other cross-project permissions).
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubSubscription
+metadata:
+  name: {{ $name }}-control-subscription
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.controlSubscription | quote }}
+  expirationPolicy:
+    ttl: ""
+  topicRef:
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.projectId .Values.pubsub.controlTopic | quote }}
+{{- if eq .Values.region .Values.leaderRegion }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-data-publisher
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.projectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.publisher
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubTopic
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.projectId .Values.pubsub.dataTopic | quote }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-control-subscriber
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.identity.projectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.subscriber
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubSubscription
+    external: {{ printf "projects/%s/subscriptions/%s" .Values.identity.projectId .Values.pubsub.controlSubscription | quote }}
+{{- else }}
+---
+# Followers can request a resync but cannot publish resource data.
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-control-publisher
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.projectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.publisher
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubTopic
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.projectId .Values.pubsub.controlTopic | quote }}
+{{- end }}
+{{- end }}
