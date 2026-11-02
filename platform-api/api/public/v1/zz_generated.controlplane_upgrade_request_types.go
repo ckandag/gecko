@@ -52,14 +52,17 @@ type ControlPlaneUpgradeRequestSpec struct {
 // request. Rollout progress remains on Cluster.status.controlPlaneUpgrade.
 type ControlPlaneUpgradeRequestStatus struct {
 
-	// decision is the outcome of the request: Accepted or Rejected. It is omitted
-	// while the request is awaiting a decision.
+	// decision is Accepted when the request has been validated and queued for
+	// processing, or Rejected when it cannot be fulfilled. Acceptance is recorded
+	// before the upgrade starts; rollout progress is reported on the Cluster.
+	// An accepted request may be rejected if its target becomes unavailable
+	// before it starts. This field is omitted while awaiting a decision.
 	// +optional
 	// +kubebuilder:validation:Enum=Accepted;Rejected
 	// +kubebuilder:validation:MaxLength=8
 	Decision string `json:"decision,omitempty"`
 
-	// reason is a short code explaining the decision, such as UpgradeRequested
+	// reason is a short code explaining the decision, such as UpgradeAccepted
 	// for an accepted request, or UpgradeInProgress or TargetNotAvailable for a
 	// rejected request.
 	// +optional

@@ -43,8 +43,11 @@ properties:
         type: string
       decision:
         description: |-
-          decision is the outcome of the request: Accepted or Rejected. It is omitted
-          while the request is awaiting a decision.
+          decision is Accepted when the request has been validated and queued for
+          processing, or Rejected when it cannot be fulfilled. Acceptance is recorded
+          before the upgrade starts; rollout progress is reported on the Cluster.
+          An accepted request may be rejected if its target becomes unavailable
+          before it starts. This field is omitted while awaiting a decision.
         enum:
         - Accepted
         - Rejected
@@ -52,7 +55,7 @@ properties:
         type: string
       reason:
         description: |-
-          reason is a short code explaining the decision, such as UpgradeRequested
+          reason is a short code explaining the decision, such as UpgradeAccepted
           for an accepted request, or UpgradeInProgress or TargetNotAvailable for a
           rejected request.
         maxLength: 63

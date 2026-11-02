@@ -233,7 +233,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 // reconcileCompletedOrManual handles a completed target before considering a new
-// automatic upgrade, then gives pending manual requests priority over automation.
+// automatic upgrade, then resumes accepted requests before admitting new work.
 func (r *Reconciler) reconcileCompletedOrManual(
 	ctx context.Context,
 	cluster *privatev1.Cluster,
@@ -242,10 +242,16 @@ func (r *Reconciler) reconcileCompletedOrManual(
 	observed []metav1.Condition,
 ) (*privatev1.ControlPlaneUpgradeResult, bool, reconcile.Result, error) {
 	result := recordCompletion(cluster.Status.ControlPlaneUpgrade, completed)
-	if result != nil && result.TargetVersion == completed && hasAcceptedManualRequest(acceptedRequests, completed) &&
-		result.TargetSource != targetSourceCustomer {
-		result = result.DeepCopy()
-		result.TargetSource = targetSourceCustomer
+	if hasAcceptedManualRequest(acceptedRequests, completed) {
+		// Acceptance is persisted before changing the Cluster version, so it
+		// survives even if every rollout status write fails until completion.
+		if result == nil || result.TargetVersion != completed {
+			result = recordCompletion(recordActiveTarget(result, completed), completed)
+		}
+		if result.TargetSource != targetSourceCustomer {
+			result = result.DeepCopy()
+			result.TargetSource = targetSourceCustomer
+		}
 	}
 	// Persist completion before considering another target. In particular, a
 	// missing maintenance window must not leave a completed manual upgrade marked
@@ -258,6 +264,9 @@ func (r *Reconciler) reconcileCompletedOrManual(
 			newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""),
 		)
 		return result, true, statusResult, err
+	}
+	if accepted := nextAcceptedRequest(acceptedRequests, completed); accepted != nil {
+		requests = append([]privatev1.ControlPlaneUpgradeRequest{*accepted}, requests...)
 	}
 	if len(requests) > 0 {
 		statusResult, err := r.reconcileManualRequest(ctx, cluster, result, requests, completed, observed)
@@ -383,31 +392,6 @@ func (r *Reconciler) reconcileActiveUpgrade(
 	if accepted {
 		result.TargetSource = targetSourceCustomer
 	}
-	type requestDecision struct {
-		request  *privatev1.ControlPlaneUpgradeRequest
-		decision string
-		reason   string
-	}
-	decisions := make([]requestDecision, 0, len(requests))
-	for i := range requests {
-		request := &requests[i]
-		previous := cluster.Status.ControlPlaneUpgrade
-		// The Cluster spec update can succeed even if recording the customer's
-		// target in status fails. A pending request matching an untracked target
-		// recovers that partially recorded manual upgrade on the next reconcile.
-		untracked := previous == nil || previous.TargetVersion != target
-		customerTracked := previous != nil && previous.TargetVersion == target &&
-			previous.TargetSource == targetSourceCustomer && previous.RequestedTime != nil &&
-			!request.CreationTimestamp.After(previous.RequestedTime.Time)
-		if !accepted && request.Spec.TargetVersion == target &&
-			(untracked || customerTracked) {
-			accepted = true
-			result.TargetSource = targetSourceCustomer
-			decisions = append(decisions, requestDecision{request, "Accepted", "UpgradeRequested"})
-		} else {
-			decisions = append(decisions, requestDecision{request, "Rejected", "UpgradeInProgress"})
-		}
-	}
 
 	var conditions []metav1.Condition
 	requeueAfter := requeueObserving
@@ -439,8 +423,8 @@ func (r *Reconciler) reconcileActiveUpgrade(
 	if err != nil || statusResult.RequeueAfter == 0 {
 		return statusResult, err
 	}
-	for _, decision := range decisions {
-		if err := r.recordRequestDecision(ctx, decision.request, decision.decision, decision.reason); err != nil {
+	for i := range requests {
+		if err := r.recordRequestDecision(ctx, &requests[i], "Rejected", "UpgradeInProgress"); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -463,13 +447,28 @@ func (r *Reconciler) clusterRequests(ctx context.Context, cluster *privatev1.Clu
 			accepted = append(accepted, request)
 		}
 	}
-	sort.Slice(requests, func(i, j int) bool {
-		if requests[i].CreationTimestamp.Equal(&requests[j].CreationTimestamp) {
-			return requests[i].Name < requests[j].Name
-		}
-		return requests[i].CreationTimestamp.Before(&requests[j].CreationTimestamp)
-	})
+	for _, group := range [][]privatev1.ControlPlaneUpgradeRequest{requests, accepted} {
+		sort.Slice(group, func(i, j int) bool {
+			if group[i].CreationTimestamp.Equal(&group[j].CreationTimestamp) {
+				return group[i].Name < group[j].Name
+			}
+			return group[i].CreationTimestamp.Before(&group[j].CreationTimestamp)
+		})
+	}
 	return requests, accepted, nil
+}
+
+// nextAcceptedRequest skips historical requests already fulfilled by the observed
+// version. Invalid targets are returned for normal rejection, not ignored.
+func nextAcceptedRequest(requests []privatev1.ControlPlaneUpgradeRequest, completed string) *privatev1.ControlPlaneUpgradeRequest {
+	current, currentErr := utilversion.ParseSemantic(completed)
+	for i := range requests {
+		target, targetErr := utilversion.ParseSemantic(requests[i].Spec.TargetVersion)
+		if currentErr != nil || targetErr != nil || current.LessThan(target) {
+			return &requests[i]
+		}
+	}
+	return nil
 }
 
 func hasAcceptedManualRequest(requests []privatev1.ControlPlaneUpgradeRequest, target string) bool {
@@ -487,9 +486,6 @@ func (r *Reconciler) recordRequestDecision(ctx context.Context, request *private
 	now := metav1.Now()
 	request.Status.DecidedTime = &now
 	if err := r.apiClient.Status().Update(ctx, request); err != nil {
-		if apierrors.IsConflict(err) {
-			return nil
-		}
 		return fmt.Errorf("%s: update request %s status: %w", adapterName, request.Name, err)
 	}
 	return nil
@@ -543,10 +539,18 @@ func (r *Reconciler) reconcileManualRequest(
 			newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 	}
 
+	// Persist acceptance before applying the target. A failed or conflicting
+	// decision write must never start a rollout. Accepted requests are resumed
+	// on a fresh reconcile if the Cluster update fails or the process restarts.
+	if request.Status.Decision != "Accepted" {
+		if err := r.recordRequestDecision(ctx, request, "Accepted", "UpgradeAccepted"); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
 	cluster.Spec.Release.Version = target
 	if err := r.apiClient.Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
-			// Do not decide the request until a fresh reconcile wins the update.
+			// Resume the accepted request after reading the current Cluster.
 			return reconcile.Result{RequeueAfter: requeueConflict}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("%s: request manual version %s for cluster %s: %w", adapterName, target, cluster.Name, err)
@@ -558,9 +562,6 @@ func (r *Reconciler) reconcileManualRequest(
 		newCondition(conditionProgressing, metav1.ConditionTrue, "UpgradeRequested", fmt.Sprintf("Requested control-plane upgrade from %s to %s", completed, target)),
 		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 	if err != nil || statusResult.RequeueAfter == 0 {
-		return reconcile.Result{}, err
-	}
-	if err := r.recordRequestDecision(ctx, request, "Accepted", "UpgradeRequested"); err != nil {
 		return reconcile.Result{}, err
 	}
 	return reconcile.Result{RequeueAfter: requeueObserving}, nil
