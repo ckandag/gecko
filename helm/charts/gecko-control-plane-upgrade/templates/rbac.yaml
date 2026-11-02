@@ -13,7 +13,7 @@ rules:
     resources: ["clusters/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["gcp.managed.openshift.io"]
-    resources: ["channels", "controlplaneupgradepolicies"]
+    resources: ["channels"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["controlplaneupgraderequests"]

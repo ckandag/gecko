@@ -248,7 +248,7 @@ func (r *Reconciler) reconcileCompletedOrManual(
 		result.TargetSource = targetSourceCustomer
 	}
 	// Persist completion before considering another target. In particular, a
-	// missing automatic policy must not leave a completed manual upgrade marked
+	// missing maintenance window must not leave a completed manual upgrade marked
 	// as progressing indefinitely.
 	if !equality.Semantic.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
 		message := fmt.Sprintf("Control-plane upgrade to %s completed", completed)
@@ -280,7 +280,7 @@ func (r *Reconciler) requestAutomaticUpgrade(
 	cluster.Spec.Release.Version = candidate
 	if err := r.apiClient.Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
-			// Re-read the Cluster and re-evaluate requests, health and policy.
+			// Re-read the Cluster and re-evaluate requests, health and maintenance.
 			return reconcile.Result{RequeueAfter: requeueConflict}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("%s: request version %s for cluster %s: %w", adapterName, candidate, cluster.Name, err)
