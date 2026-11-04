@@ -8,7 +8,7 @@ metadata:
     {{- include "gecko-replication.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # Avoid overlapping leader publishers during a rollout.
+  # Avoid overlapping publishers or followers during a rollout.
   strategy:
     type: Recreate
   selector:
@@ -48,7 +48,12 @@ spec:
             - --leader-generation={{ int64 .Values.leaderGeneration }}
             - --pubsub-topic-project={{ .Values.pubsub.topicProjectId }}
             - --pubsub-data-topic={{ .Values.pubsub.dataTopic }}
+            - --pubsub-data-subscription=projects/{{ .Values.pubsub.subscriptionProjectId }}/subscriptions/{{ .Values.pubsub.dataSubscription }}
+            {{- if eq .Values.region .Values.leaderRegion }}
             - --pubsub-control-subscription=projects/{{ .Values.pubsub.subscriptionProjectId }}/subscriptions/{{ .Values.pubsub.controlSubscription }}
+            {{- else }}
+            - --pubsub-control-topic={{ .Values.pubsub.controlTopic }}
+            {{- end }}
             - --replicate={{ .Values.replicate }}
             - --resync-interval={{ .Values.resyncInterval }}
             - --capture-max-bytes={{ int .Values.captureMaxBytes }}
