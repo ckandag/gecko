@@ -28,7 +28,12 @@ metadata:
 rules:
   - apiGroups: [gcp.managed.openshift.io]
     resources: {{ $resources | toJson }}
-    verbs: [get, list, watch]
+    verbs: [get, list{{ if eq .Values.region .Values.leaderRegion }}, watch{{ else }}, create, update, delete{{ end }}]
+  {{- if ne .Values.region .Values.leaderRegion }}
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

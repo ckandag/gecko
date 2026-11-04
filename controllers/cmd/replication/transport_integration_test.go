@@ -18,6 +18,7 @@ import (
 
 	publisher "github.com/openshift-online/gecko/controllers/replication"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -85,7 +86,7 @@ func TestPublisherPubSubRoundTrip(t *testing.T) {
 	controller, err := publisher.NewPublisher(publisher.Config{
 		Region: "us-east1", LeaderRegion: "us-east1", Generation: 3,
 		Resources: resource, ResyncInterval: time.Hour,
-	}, api, dataSink{dataPublisher}, controlSource{client.Subscriber("leader-control")}, publisher.NewMetrics(prometheus.NewRegistry()), logr.Discard())
+	}, api, topicSink{dataPublisher}, subscriptionSource{client.Subscriber("leader-control")}, publisher.NewMetrics(prometheus.NewRegistry()), logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +145,98 @@ func TestPublisherPubSubRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := <-subscriberResult; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
+func TestFollowerPubSubRoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	emulator := pstest.NewServer()
+	defer emulator.Close()
+	conn, err := grpc.NewClient(emulator.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client, err := pubsub.NewClient(ctx, "test-project", option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, topic := range []string{"data", "control"} {
+		if _, err := client.TopicAdminClient.CreateTopic(ctx, &pb.Topic{Name: "projects/test-project/topics/" + topic}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.SubscriptionAdminClient.CreateSubscription(ctx, &pb.Subscription{
+		Name: "projects/test-project/subscriptions/follower-data", Topic: "projects/test-project/topics/data",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resources, err := publisher.ParseResources("roles.gcp.managed.openshift.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		resources[0].GVR: "RoleList", {Version: "v1", Resource: "namespaces"}: "NamespaceList",
+	})
+	config := publisher.Config{Region: "us-west1", LeaderRegion: "us-central1", Generation: 3, Resources: resources, ResyncInterval: time.Hour}
+	mirror, err := publisher.NewAPIMirror(api, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPublisher := client.Publisher("control")
+	controlPublisher.PublishSettings.CountThreshold = 1
+	defer controlPublisher.Stop()
+	dataSubscriber := client.Subscriber("follower-data")
+	dataSubscriber.ReceiveSettings.MaxOutstandingMessages = 1
+	dataSubscriber.ReceiveSettings.NumGoroutines = 1
+	receiver, err := publisher.NewReceiver(config, subscriptionSource{dataSubscriber}, topicSink{controlPublisher}, mirror, publisher.NewMetrics(prometheus.NewRegistry()), logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverResult := make(chan error, 1)
+	go func() { receiverResult <- receiver.Run(ctx) }()
+	role := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "gcp.managed.openshift.io/v1", "kind": "Role",
+		"metadata": map[string]interface{}{"namespace": "tenant-a", "name": "viewer", "uid": "source-uid", "resourceVersion": "4"},
+		"spec":     map[string]interface{}{"permissions": []interface{}{"cluster.get"}},
+	}}
+	object, err := json.Marshal(role.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := json.Marshal(publisher.Event{
+		EventType: publisher.CreateOrUpdate, ResourceKind: resources[0].ID,
+		OriginRegion: "us-central1", Generation: 3, Namespace: "tenant-a", Name: "viewer",
+		SourceResourceVersion: "4", Object: object, UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataPublisher := client.Publisher("data")
+	dataPublisher.PublishSettings.CountThreshold = 1
+	defer dataPublisher.Stop()
+	if _, err := dataPublisher.Publish(ctx, &pubsub.Message{Data: event}).Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		local, err := api.Resource(resources[0].GVR).Namespace("tenant-a").Get(ctx, "viewer", metav1.GetOptions{})
+		if err == nil {
+			if local.GetAnnotations()["replication.gcp.managed.openshift.io/replicated-from"] != "us-central1" {
+				t.Fatalf("local mirror lacks leader provenance: %v", local.GetAnnotations())
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("follower did not apply Pub/Sub event: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-receiverResult; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }

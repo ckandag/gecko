@@ -3,7 +3,7 @@
 {{- $gsa := include "gecko-replication.gcpServiceAccount" . -}}
 {{- if .Values.pubsub.topicOwner }}
 ---
-# One designated release owns both shared topics when chart ownership is enabled.
+# The owning deployment is chosen independently of leaderRegion.
 apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
 kind: PubSubTopic
 metadata:
@@ -23,9 +23,49 @@ spec:
   resourceID: {{ .Values.pubsub.controlTopic | quote }}
 {{- end }}
 ---
-# The leader reads resync requests from a subscription in its regional project.
-# Config Connector needs pubsub.topics.attachSubscription on the shared control
-# topic; Terraform grants it outside this chart.
+# Every region has its own data subscription. The leader consumes and skips its
+# own events; a promoted follower already has a subscription and backlog.
+# Config Connector in this region needs pubsub.topics.attachSubscription on the
+# shared data topic; Terraform grants it outside this chart.
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubSubscription
+metadata:
+  name: {{ $name }}-data-subscription
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.subscriptionProjectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.dataSubscription | quote }}
+  # Keep the delivery window below the controller's eight-day invalid-ID cache.
+  messageRetentionDuration: "604800s"
+  expirationPolicy:
+    ttl: ""
+  retryPolicy:
+    minimumBackoff: "10s"
+    maximumBackoff: "600s"
+  topicRef:
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.dataTopic | quote }}
+---
+# Grant the controller access to its subscription in the regional project.
+# The subscription references the data topic in the shared service project.
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-data-subscriber
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.subscriptionProjectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.subscriber
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubSubscription
+    external: {{ printf "projects/%s/subscriptions/%s" .Values.pubsub.subscriptionProjectId .Values.pubsub.dataSubscription | quote }}
+---
+# Every region owns its control subscription in its own project, attached to the
+# shared-project control topic, ready for a later manual promotion. Config
+# Connector in this region's project needs pubsub.topics.attachSubscription on
+# the shared control topic (an infrastructure prerequisite granted outside this
+# chart, alongside KCC's other cross-project permissions).
 apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
 kind: PubSubSubscription
 metadata:
@@ -38,6 +78,23 @@ spec:
     ttl: ""
   topicRef:
     external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.controlTopic | quote }}
+{{- if eq .Values.region .Values.leaderRegion }}
+{{- if .Values.pubsub.manageTopicIAM }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-data-publisher
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.topicProjectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.publisher
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubTopic
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.dataTopic | quote }}
+{{- end }}
 ---
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMPolicyMember
@@ -52,13 +109,14 @@ spec:
     apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
     kind: PubSubSubscription
     external: {{ printf "projects/%s/subscriptions/%s" .Values.pubsub.subscriptionProjectId .Values.pubsub.controlSubscription | quote }}
+{{- else }}
 {{- if .Values.pubsub.manageTopicIAM }}
 ---
-# Only the leader publishes replicated resource events to the shared data topic.
+# Followers can request a resync but cannot publish resource data.
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMPolicyMember
 metadata:
-  name: {{ $name }}-data-publisher
+  name: {{ $name }}-control-publisher
   annotations:
     cnrm.cloud.google.com/project-id: {{ .Values.pubsub.topicProjectId | quote }}
 spec:
@@ -67,6 +125,7 @@ spec:
   resourceRef:
     apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
     kind: PubSubTopic
-    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.dataTopic | quote }}
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.controlTopic | quote }}
+{{- end }}
 {{- end }}
 {{- end }}

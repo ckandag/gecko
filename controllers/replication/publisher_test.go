@@ -92,7 +92,7 @@ func testSource(t *testing.T, list func() (*unstructured.UnstructuredList, error
 	return api
 }
 
-func testPublisher(t *testing.T, source *fake.FakeDynamicClient, sink *recordingSink, control ControlSource) *Publisher {
+func testPublisher(t *testing.T, source *fake.FakeDynamicClient, sink *recordingSink, control SubscriptionSource) *Publisher {
 	t.Helper()
 	p, err := NewPublisher(Config{Region: "us-east1", LeaderRegion: "us-east1", Generation: 3,
 		Resources:      []Resource{{ID: "roles.gcp.managed.openshift.io", GVR: supportedResources["roles.gcp.managed.openshift.io"]}},
@@ -105,11 +105,14 @@ func testPublisher(t *testing.T, source *fake.FakeDynamicClient, sink *recording
 
 type quietControl struct{}
 
-func (quietControl) Receive(ctx context.Context, _ func([]byte)) error { <-ctx.Done(); return nil }
+func (quietControl) Receive(ctx context.Context, _ func(context.Context, []byte) error) error {
+	<-ctx.Done()
+	return nil
+}
 
 type deniedControl struct{ called chan struct{} }
 
-func (control deniedControl) Receive(context.Context, func([]byte)) error {
+func (control deniedControl) Receive(context.Context, func(context.Context, []byte) error) error {
 	select {
 	case control.called <- struct{}{}:
 	default:
@@ -464,13 +467,15 @@ func TestExpiredContinuationStartsNewCapture(t *testing.T) {
 
 type channelControl struct{ messages chan []byte }
 
-func (s channelControl) Receive(ctx context.Context, handle func([]byte)) error {
+func (s channelControl) Receive(ctx context.Context, handle func(context.Context, []byte) error) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case data := <-s.messages:
-			handle(data)
+			if err := handle(ctx, data); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -480,7 +485,7 @@ type recoveringControl struct {
 	attempts int
 }
 
-func (control *recoveringControl) Receive(ctx context.Context, handle func([]byte)) error {
+func (control *recoveringControl) Receive(ctx context.Context, handle func(context.Context, []byte) error) error {
 	control.attempts++
 	if control.attempts == 1 {
 		return status.Error(codes.PermissionDenied, "subscription access not ready")

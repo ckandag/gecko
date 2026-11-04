@@ -40,10 +40,10 @@ type DataSink interface {
 	Publish(context.Context, []byte) error
 }
 
-// ControlSource receives messages from the leader's control subscription.
-// The callback must return after the request is queued for a resync.
-type ControlSource interface {
-	Receive(context.Context, func([]byte)) error
+// SubscriptionSource acknowledges a delivery when the handler succeeds and
+// negatively acknowledges it when the handler returns an error.
+type SubscriptionSource interface {
+	Receive(context.Context, func(context.Context, []byte) error) error
 }
 
 type Config struct {
@@ -63,7 +63,7 @@ type Publisher struct {
 	config  Config
 	source  dynamic.Interface
 	sink    DataSink
-	control ControlSource
+	control SubscriptionSource
 	metrics *Metrics
 	log     logr.Logger
 
@@ -71,7 +71,7 @@ type Publisher struct {
 	locks    map[string]*sync.Mutex
 }
 
-func NewPublisher(cfg Config, source dynamic.Interface, sink DataSink, control ControlSource, metrics *Metrics, log logr.Logger) (*Publisher, error) {
+func NewPublisher(cfg Config, source dynamic.Interface, sink DataSink, control SubscriptionSource, metrics *Metrics, log logr.Logger) (*Publisher, error) {
 	if cfg.Region == "" || cfg.LeaderRegion == "" || cfg.Generation == 0 || len(cfg.Resources) == 0 {
 		return nil, fmt.Errorf("region, leader region, positive generation, and replicated resources are required")
 	}
@@ -133,39 +133,7 @@ func (p *Publisher) Run(ctx context.Context) error {
 func (p *Publisher) consumeControl(ctx context.Context) error {
 	delay := retryDelay
 	for ctx.Err() == nil {
-		err := p.control.Receive(ctx, func(data []byte) {
-			var event Event
-			if err := json.Unmarshal(data, &event); err != nil {
-				p.log.Error(err, "ignoring malformed control message")
-				return
-			}
-			if event.EventType != ResyncRequest {
-				p.log.Info("ignoring non-resync control message", "eventType", event.EventType)
-				return
-			}
-			if event.Generation != p.config.Generation {
-				p.log.Info("ignoring resync request from a different generation", "generation", event.Generation)
-				return
-			}
-			if event.ResourceKind == "" {
-				for _, ch := range p.requests {
-					select {
-					case ch <- struct{}{}:
-					default:
-					}
-				}
-				return
-			}
-			ch, ok := p.requests[event.ResourceKind]
-			if !ok {
-				p.log.Info("ignoring resync request for unconfigured resource", "resourceKind", event.ResourceKind)
-				return
-			}
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
-		})
+		err := p.control.Receive(ctx, p.queueResyncRequest)
 		if ctx.Err() != nil {
 			break
 		}
@@ -181,6 +149,43 @@ func (p *Publisher) consumeControl(ctx context.Context) error {
 		delay = min(delay*2, maxRetryDelay)
 	}
 	//nolint:nilerr // Context cancellation is a clean shutdown, even after an operation returns an error.
+	return nil
+}
+
+// queueResyncRequest returns after the request is queued (or deliberately
+// ignored), which is the acknowledgement boundary for control messages.
+func (p *Publisher) queueResyncRequest(_ context.Context, data []byte) error {
+	var event Event
+	if err := json.Unmarshal(data, &event); err != nil {
+		p.log.Error(err, "ignoring malformed control message")
+		return nil
+	}
+	if event.EventType != ResyncRequest {
+		p.log.Info("ignoring non-resync control message", "eventType", event.EventType)
+		return nil
+	}
+	if event.Generation != p.config.Generation {
+		p.log.Info("ignoring resync request from a different generation", "generation", event.Generation)
+		return nil
+	}
+	if event.ResourceKind == "" {
+		for _, ch := range p.requests {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+		return nil
+	}
+	ch, ok := p.requests[event.ResourceKind]
+	if !ok {
+		p.log.Info("ignoring resync request for unconfigured resource", "resourceKind", event.ResourceKind)
+		return nil
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 	return nil
 }
 

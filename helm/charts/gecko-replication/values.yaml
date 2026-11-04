@@ -1,5 +1,8 @@
 # Enable only after the regional API LIST/WATCH contract and Pub/Sub resources
-# have been verified for this environment.
+# have been verified for this environment. Follower write guards must be active
+# before follower consumption is enabled. The first-stage follower relies on
+# periodic inventories to repair stale post-delete deliveries until durable
+# per-key delete ordering is implemented.
 enabled: false
 
 region: ""
@@ -19,7 +22,9 @@ pubsub:
   subscriptionProjectId: ""
   dataTopic: resource-replication
   controlTopic: resource-replication-control
-  # The leader reads resync requests from its regional control subscription.
+  # Each region owns a data subscription, including the leader.
+  dataSubscription: ""
+  # Each region owns a control subscription for possible promotion.
   controlSubscription: ""
   # Optional chart ownership; Terraform owns the topics in current environments.
   topicOwner: false
@@ -39,7 +44,7 @@ image:
   tag: ""
   pullPolicy: Always
 
-# One leader publisher per region; there is no leader lease.
+# One controller per region while follower ordering state is held in memory.
 replicaCount: 1
 logLevel: info
 logFormat: json
