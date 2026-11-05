@@ -27,7 +27,7 @@ spec:
     - matches:
         - path:
             type: RegularExpression
-            value: '^/apis/gcp\.managed\.openshift\.io/v1/namespaces/[^/]+/(roles|rolebindings)(/[^/]+)?$'
+            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[^/]+/(roles|rolebindings)(/[^/]+)?$'
       backendRefs:
         - name: {{ .Values.gateway.service.name }}
           port: {{ if .Values.esp.enabled }}{{ .Values.esp.port }}{{ else }}{{ .Values.gateway.service.port }}{{ end }}
