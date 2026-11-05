@@ -20,10 +20,6 @@ type Status struct {
 	// ResourceStatuses contains statusFeedback values keyed by resource identity then by field name.
 	// Key format: "{group}/{version}/{resource}/{namespace}/{name}"
 	ResourceStatuses map[string]map[string]string
-	// ResourceTagsMismatch reports whether desired HostedCluster tags differ from
-	// the first submitted tags. Set by Apply; nil means no comparison was made.
-	// This feedback is independent of Stale and does not imply apply failure.
-	ResourceTagsMismatch *bool
 	// Stale is true when an expected status document is missing or does not yet
 	// reflect the most recently written spec. Callers should requeue sooner and
 	// avoid trusting condition values until Stale becomes false.

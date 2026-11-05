@@ -119,7 +119,6 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 	batch := mc.specs.BulkWriter(ctx)
 
 	var jobs []*firestore.BulkWriterJob
-	var tagsMismatch *bool
 
 	for _, raw := range manifests {
 		if len(raw) == 0 {
@@ -132,15 +131,6 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 		}
 		if unknownKind {
 			c.log.Infof(ctx, "firestore transport: Apply %s/%s: unknown Kind for resource %s/%s — using fallback pluralization, add it to kindToResource if incorrect", targetCluster, groupKey, ref.Namespace, ref.Name)
-		}
-
-		if ref.Group == "hypershift.openshift.io" && ref.Resource == "hostedclusters" {
-			mismatch, err := applyHostedCluster(ctx, mc.specs, groupKey, targetCluster, ref, raw)
-			if err != nil {
-				return nil, fmt.Errorf("firestore transport: apply HostedCluster desire: %w", err)
-			}
-			tagsMismatch = &mismatch
-			continue
 		}
 
 		// Write ApplyDesire
@@ -175,12 +165,7 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 
 	c.log.Infof(ctx, "firestore transport: applied %d manifests for %s/%s", len(manifests), targetCluster, groupKey)
 
-	result, err := c.GetStatus(ctx, targetCluster, groupKey)
-	if err != nil {
-		return nil, err
-	}
-	result.ResourceTagsMismatch = tagsMismatch
-	return result, nil
+	return c.GetStatus(ctx, targetCluster, groupKey)
 }
 
 // GetStatus compares expected Desire documents with the ApplyDesire and

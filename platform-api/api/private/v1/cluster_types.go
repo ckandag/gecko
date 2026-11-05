@@ -121,8 +121,6 @@ type ClusterPlatformSpec struct {
 }
 
 // GCPClusterPlatform defines the behavior of the GCP infrastructure provider.
-// +kubebuilder:validation:XValidation:rule="has(self.resourceTags) == has(oldSelf.resourceTags)",message="resourceTags may only be configured during cluster creation",fieldPath=".resourceTags"
-// +kubebuilder:validation:XValidation:rule="!has(self.resourceTags) || self.resourceTags.all(t, !has(t.parentID) || t.parentID.matches('^[1-9][0-9]{0,31}$') || t.parentID == self.projectID)",message="resourceTags parentID must be an organization ID or the cluster GCP project ID",fieldPath=".resourceTags"
 type GCPClusterPlatform struct {
 	// project is the GCP project ID.
 	// A valid project ID must satisfy the following rules:
@@ -214,21 +212,6 @@ type GCPClusterPlatform struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=60
 	ResourceLabels []GCPResourceLabel `json:"resourceLabels,omitempty"`
-
-	// resourceTags selects pre-existing GCP Resource Manager tags to apply to
-	// supported GCP resources created for the cluster. Tags must already exist,
-	// and the cluster service accounts must have permission to use them.
-	// Each short key must be unique, even across different parents. When parentID
-	// is omitted, the cluster's GCP project is used. Tags can only be configured
-	// during cluster creation and cannot be added, removed, or changed later.
-	// +orlop:public
-	// +optional
-	// +listType=atomic
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=50
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="resourceTags are immutable"
-	// +kubebuilder:validation:XValidation:rule="self.all(t, self.exists_one(u, u.key == t.key))",message="resourceTags keys must be unique across all parents"
-	ResourceTags []GCPResourceTag `json:"resourceTags,omitempty"`
 }
 
 // WorkloadIdentitySpec defines Workload Identity Federation for the cluster.

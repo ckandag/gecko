@@ -38,19 +38,17 @@ type Reconciler struct {
 	log                 logger.Logger
 	client              client.Client
 	customerLabels      map[string]string
-	resourceTags        []privatev1.GCPResourceTag
 	pullSecretStoreName string
 	pullSecretGCPKey    string
 }
 
 // New creates a new Reconciler.
-func New(transport transport.Client, log logger.Logger, c client.Client, customerLabels map[string]string, resourceTags []privatev1.GCPResourceTag, pullSecretStoreName, pullSecretGCPKey string) *Reconciler {
+func New(transport transport.Client, log logger.Logger, c client.Client, customerLabels map[string]string, pullSecretStoreName, pullSecretGCPKey string) *Reconciler {
 	return &Reconciler{
 		transport:           transport,
 		log:                 log,
 		client:              c,
 		customerLabels:      customerLabels,
-		resourceTags:        resourceTags,
 		pullSecretStoreName: pullSecretStoreName,
 		pullSecretGCPKey:    pullSecretGCPKey,
 	}
@@ -127,17 +125,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	// Merge the persisted per-cluster tags with platform configuration. Platform
-	// tags win on duplicate keys, matching ownership of required platform tags.
-	var requestedTags []privatev1.GCPResourceTag
-	if gcp := cluster.Spec.Platform.GCP; gcp != nil {
-		requestedTags = gcp.ResourceTags
-	}
-	resourceTags, err := mergeResourceTags(requestedTags, r.resourceTags, gcpProjectID)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("%s: merge resource tags: %w", adapterName, err)
-	}
-
 	// Build manifests.
 	// TODO: CreatedBy is not yet in the orlop ClusterSpec.
 	mwInput := manifest.Input{
@@ -167,7 +154,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		PullSecretStoreName:  r.pullSecretStoreName,
 		PullSecretGCPKey:     r.pullSecretGCPKey,
 		ResourceLabels:       r.customerLabels,
-		ResourceTags:         resourceTags,
 	}
 
 	manifests, err := manifest.Build(mwInput)
@@ -180,15 +166,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("%s: apply resources: %w", adapterName, err)
 	}
 
-	// Tag comparison uses the specs transaction, not asynchronous apply feedback,
-	// so it remains valid even while kube-applier status is stale.
-	statusChanged := setResourceTagsCondition(&cluster, mwStatus)
-	if mwStatus == nil || !mwStatus.Stale {
-		changed, err := r.applyStatusConditions(&cluster, mwStatus)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
-		}
-		statusChanged = statusChanged || changed
+	// If status is stale, skip condition updates and requeue quickly.
+	if mwStatus != nil && mwStatus.Stale {
+		log.Infof(ctx, "hc-controller: cluster %s status is stale, requeueing after %s", req.Name, requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	}
+
+	// Write status conditions — only update if something changed.
+	statusChanged, err := r.applyStatusConditions(&cluster, mwStatus)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
 	}
 	if statusChanged {
 		if err := r.client.Status().Update(ctx, &cluster); err != nil {
@@ -197,11 +184,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			}
 			return reconcile.Result{}, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 		}
-	}
-
-	if mwStatus != nil && mwStatus.Stale {
-		log.Infof(ctx, "hc-controller: cluster %s status is stale, requeueing after %s", req.Name, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "ResourcesApplied") {
@@ -376,26 +358,6 @@ func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, me
 		ObservedGeneration: gen,
 	})
 	return a || b
-}
-
-// setResourceTagsCondition reports preservation without affecting apply/availability.
-func setResourceTagsCondition(cluster *privatev1.Cluster, feedback *transport.Status) bool {
-	if feedback == nil || feedback.ResourceTagsMismatch == nil {
-		return false
-	}
-	condition := metav1.Condition{
-		Type:               "ResourceTagsMismatch",
-		Status:             metav1.ConditionFalse,
-		Reason:             "TagsMatch",
-		Message:            "Desired resource tags match the initially submitted tags",
-		ObservedGeneration: cluster.Generation,
-	}
-	if *feedback.ResourceTagsMismatch {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "TagsPreserved"
-		condition.Message = "Desired resource tags differ from the initially submitted tags. The initial tags were retained because resource tags are immutable."
-	}
-	return meta.SetStatusCondition(&cluster.Status.Conditions, condition)
 }
 
 // applyStatusConditions derives conditions from the resource status and writes them to the cluster.

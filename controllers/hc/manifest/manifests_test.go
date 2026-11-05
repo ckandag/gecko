@@ -8,9 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/openshift-online/gecko/controllers/hc/manifest"
-	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
-
-	"k8s.io/utils/ptr"
 )
 
 func testInput() manifest.Input {
@@ -364,38 +361,4 @@ func TestBuild_PullSecretStoreName(t *testing.T) {
 		storeRef := spec["secretStoreRef"].(map[string]any)
 		require.Equal(t, "gcp-secret-manager", storeRef["name"])
 	})
-}
-
-func TestBuild_ResourceTags(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		tags []privatev1.GCPResourceTag
-		want string
-	}{
-		{name: "absent"},
-		{name: "empty", tags: []privatev1.GCPResourceTag{}},
-		{name: "configured", tags: []privatev1.GCPResourceTag{{Key: "redhat-managed", Value: "true"}, {Key: "env", Value: "prod", ParentID: ptr.To("123456789")}}, want: `[{"key":"redhat-managed","value":"true"},{"key":"env","value":"prod","parentID":"123456789"}]`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			input := testInput()
-			input.ResourceTags = tc.tags
-			input.ResourceLabels = map[string]string{"partner": "openshift"}
-			manifests, err := manifest.Build(input)
-			require.NoError(t, err)
-			var obj map[string]any
-			require.NoError(t, json.Unmarshal(manifests[3], &obj))
-			gcp := obj["spec"].(map[string]any)["platform"].(map[string]any)["gcp"].(map[string]any)
-			if tc.want == "" {
-				require.NotContains(t, gcp, "resourceTags")
-			} else {
-				raw, err := json.Marshal(gcp["resourceTags"])
-				require.NoError(t, err)
-				require.JSONEq(t, tc.want, string(raw))
-			}
-			require.Contains(t, gcp, "resourceLabels")
-			again, err := manifest.Build(input)
-			require.NoError(t, err)
-			require.Equal(t, manifests, again)
-		})
-	}
 }

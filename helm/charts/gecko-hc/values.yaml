@@ -20,14 +20,6 @@ pullSecret:
 # Injected by ArgoCD from the cluster secret meta_customer_labels.
 # Default to empty object if not provided.
 customerLabels: "{}"
-
-# JSON-encoded GCP Resource Manager tags from ArgoCD meta_resource_tags.
-# Merged with Cluster.spec.platform.gcp.resourceTags on every reconciliation;
-# configured tags win on duplicate keys. Keep this configuration stable for
-# existing HostedClusters: HyperShift rejects changes to immutable resourceTags.
-# Example: '[{"key":"redhat-managed","value":"true","parentID":"123456789"}]'
-# Omit parentID to use the HostedCluster project. Empty list disables tags.
-resourceTags: "[]"
 logFormat: json
 workers: 10
 
