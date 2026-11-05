@@ -1,4 +1,4 @@
-{{- if .Values.gateway.globalAuthorization.enabled }}
+{{- if or .Values.gateway.globalAuthorization.enabled .Values.gateway.globalAuthorization.certificate.enabled }}
 {{- $hostname := required "gateway.globalAuthorization.hostname must be set when enabled" .Values.gateway.globalAuthorization.hostname -}}
 {{- $projectId := required "gateway.projectId must be set when global authorization is enabled" .Values.gateway.projectId -}}
 {{- $authorization := required "gateway.globalAuthorization.certificate.dnsAuthorization must be set when enabled" .Values.gateway.globalAuthorization.certificate.dnsAuthorization -}}

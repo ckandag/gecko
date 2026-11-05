@@ -132,6 +132,9 @@ gateway:
     enabled: false
     hostname: ""
     certificate:
+      # Provision the regional certificate and map entry before opening the
+      # global authorization route. The top-level enabled flag also creates them.
+      enabled: false
       name: platform-api-global-authz-cert
       # Full Certificate Manager DNS authorization resource name, provisioned
       # in this regional project by infrastructure Terraform.
