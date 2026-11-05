@@ -337,8 +337,8 @@ type NodePoolStatus struct {
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// currentVersion is the last OpenShift version HyperShift reports as applied
-	// to this NodePool. It does not advance merely because an upgrade was requested.
+	// currentVersion is the last OpenShift version observed as applied to this
+	// NodePool. It does not advance merely because an upgrade was requested.
 
 	// +optional
 	CurrentVersion string `json:"currentVersion,omitempty"`
