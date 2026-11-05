@@ -214,6 +214,18 @@ properties:
         - key
         - effect
         x-kubernetes-list-type: map
+      upgrade:
+        description: NodePoolUpgradeSpec requests one customer-initiated upgrade.
+        nullable: true
+        properties:
+          startTime:
+            format: date-time
+            type: string
+          targetVersion:
+            maxLength: 63
+            minLength: 1
+            type: string
+        type: object
     required:
     - clusterID
     - platform
@@ -286,6 +298,34 @@ properties:
         x-kubernetes-list-type: map
       currentVersion:
         type: string
+      upgrade:
+        description: NodePoolUpgradeResult records the current or most recent upgrade.
+        properties:
+          acceptedTime:
+            format: date-time
+            type: string
+          completedTime:
+            format: date-time
+            type: string
+          failureMessage:
+            maxLength: 1024
+            type: string
+          failureReason:
+            maxLength: 63
+            type: string
+          requestedTime:
+            format: date-time
+            type: string
+          startedTime:
+            format: date-time
+            type: string
+          targetVersion:
+            maxLength: 63
+            minLength: 1
+            type: string
+        required:
+        - targetVersion
+        type: object
     type: object
 required:
 - spec

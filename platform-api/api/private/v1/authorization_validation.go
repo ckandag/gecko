@@ -39,11 +39,6 @@ var validAuthorizationPermissions = map[string]struct{}{
 	"role.get":           {},
 	"role.update":        {},
 	"role.delete":        {},
-
-	"nodepoolupgraderequest.create": {},
-	"nodepoolupgraderequest.list":   {},
-	"nodepoolupgraderequest.get":    {},
-	"nodepoolupgraderequest.delete": {},
 }
 
 // ValidAuthorizationPermissions returns the complete set of permissions
@@ -88,9 +83,10 @@ func NormalizeEmail(email string) (string, error) {
 //
 //nolint:kubeapilinter // runtime validation callbacks are not serialized API fields.
 type ValidatorDeps struct {
-	RoleExists                     func(context.Context, string, string) (bool, error)
-	PlatformRoleExists             func(context.Context, string) (bool, error)
-	ValidateNodePoolUpgradeRequest func(context.Context, *NodePoolUpgradeRequest) error
+	RoleExists              func(context.Context, string, string) (bool, error)
+	PlatformRoleExists      func(context.Context, string) (bool, error)
+	DefaultNodePoolUpgrade  func(context.Context, *NodePool) error
+	ValidateNodePoolUpgrade func(context.Context, *NodePool, string) error
 }
 
 var validatorDeps struct {

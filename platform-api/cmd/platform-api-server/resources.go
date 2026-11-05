@@ -16,11 +16,6 @@ var parentResourcesByKind = map[string]types.ParentResourceInfo{
 		GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
 		IDField:   "spec.clusterID",
 	},
-	"NodePoolUpgradeRequest": {
-		Plural:    "clusters",
-		GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
-		IDField:   "spec.clusterID",
-	},
 }
 
 // getPrivateResources returns the resource definitions for the private API.

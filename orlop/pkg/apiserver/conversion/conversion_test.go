@@ -285,8 +285,8 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 	}
 }
 
-func TestConverter_PrivateToPublic_NodePoolUpgradeRequestConditions(t *testing.T) {
-	gvk := schema.GroupVersion{Group: "test.example.com", Version: "v1"}.WithKind("NodePoolUpgradeRequest")
+func TestConverter_PrivateToPublic_NodePoolUpgradeConditions(t *testing.T) {
+	gvk := schema.GroupVersion{Group: "test.example.com", Version: "v1"}.WithKind("NodePool")
 	newScheme := func() *runtime.Scheme {
 		return makeTestScheme(func(scheme *runtime.Scheme) {
 			scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
@@ -295,11 +295,9 @@ func TestConverter_PrivateToPublic_NodePoolUpgradeRequestConditions(t *testing.T
 	converter := NewConverter(newScheme(), newScheme(), "")
 	private := newTestObject(withStatus(map[string]interface{}{
 		"conditions": []interface{}{
-			map[string]interface{}{"type": "Scheduled", "status": "False"},
-			map[string]interface{}{"type": "Accepted", "status": "True"},
-			map[string]interface{}{"type": "Progressing", "status": "False"},
-			map[string]interface{}{"type": "Completed", "status": "True"},
-			map[string]interface{}{"type": "Failed", "status": "False"},
+			map[string]interface{}{"type": "NodePoolUpgradeScheduled", "status": "False"},
+			map[string]interface{}{"type": "NodePoolUpgradeProgressing", "status": "False"},
+			map[string]interface{}{"type": "NodePoolUpgradeDegraded", "status": "False"},
 			map[string]interface{}{"type": "InternalOnly", "status": "True"},
 		},
 	}))
@@ -313,7 +311,7 @@ func TestConverter_PrivateToPublic_NodePoolUpgradeRequestConditions(t *testing.T
 	if err != nil || !found {
 		t.Fatalf("public conditions missing: found=%t, err=%v", found, err)
 	}
-	want := []string{"Scheduled", "Accepted", "Progressing", "Completed", "Failed"}
+	want := []string{"NodePoolUpgradeScheduled", "NodePoolUpgradeProgressing", "NodePoolUpgradeDegraded"}
 	if len(conditions) != len(want) {
 		t.Fatalf("public conditions = %v, want %v", conditions, want)
 	}

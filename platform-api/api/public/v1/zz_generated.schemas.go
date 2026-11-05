@@ -21,10 +21,6 @@ var (
 	//go:embed .schemas/nodepool_schema.yaml
 	NodePoolSchemaYAML string
 
-	// NodePoolUpgradeRequestSchemaYAML contains the OpenAPI v3 schema for NodePoolUpgradeRequest.
-	//go:embed .schemas/nodepoolupgraderequest_schema.yaml
-	NodePoolUpgradeRequestSchemaYAML string
-
 	// PlatformRoleSchemaYAML contains the OpenAPI v3 schema for PlatformRole.
 	//go:embed .schemas/platformrole_schema.yaml
 	PlatformRoleSchemaYAML string
@@ -108,17 +104,6 @@ var NodePoolResourceInfo = types.ResourceInfo{
 	},
 }
 
-// NodePoolUpgradeRequestResourceInfo describes the NodePoolUpgradeRequest resource type.
-var NodePoolUpgradeRequestResourceInfo = types.ResourceInfo{
-	GVK:        GroupVersion.WithKind("NodePoolUpgradeRequest"),
-	Plural:     "nodepoolupgraderequests",
-	Singular:   "nodepoolupgraderequest",
-	Namespaced: true,
-	SchemaYAML: NodePoolUpgradeRequestSchemaYAML,
-	// Generated from // +orlop:public-verbs annotation.
-	Verbs: []string{"create", "get", "list", "delete"},
-}
-
 // PlatformRoleResourceInfo describes the PlatformRole resource type.
 var PlatformRoleResourceInfo = types.ResourceInfo{
 	GVK:        GroupVersion.WithKind("PlatformRole"),
@@ -170,7 +155,6 @@ func GetResourceInfos() []types.ResourceInfo {
 		ChannelResourceInfo,
 		ClusterResourceInfo,
 		NodePoolResourceInfo,
-		NodePoolUpgradeRequestResourceInfo,
 		PlatformRoleResourceInfo,
 		RoleBindingResourceInfo,
 		RoleResourceInfo,

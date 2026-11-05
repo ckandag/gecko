@@ -12,11 +12,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// NewCommand returns the one-time NodePool upgrade request controller command.
+// NewCommand returns the NodePool upgrade controller command.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "nodepool-upgrade",
-		Short: "Run the NodePool upgrade request controller",
+		Short: "Run the NodePool upgrade controller",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			log, err := rf.NewLogger("nodepool-upgrade-controller")
 			if err != nil {
@@ -27,7 +27,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 			if err := ctrl.NewControllerManagedBy(mgr).
-				For(&privatev1.NodePoolUpgradeRequest{}).
+				For(&privatev1.NodePool{}).
 				WithOptions(rf.ControllerOpts()).
 				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient())); err != nil {
 				return fmt.Errorf("setup NodePool upgrade controller: %w", err)

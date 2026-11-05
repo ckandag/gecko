@@ -7,14 +7,11 @@ metadata:
     {{- include "gecko-nodepool-upgrade.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["gcp.managed.openshift.io"]
-    resources: ["nodepoolupgraderequests"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["gcp.managed.openshift.io"]
-    resources: ["nodepoolupgraderequests/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["nodepools"]
     verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["nodepools/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["clusters", "versions"]
     verbs: ["get", "list", "watch"]

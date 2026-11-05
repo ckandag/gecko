@@ -48,8 +48,8 @@ var publicConditionTypes = map[string]sets.Set[string]{
 		"ControlPlaneUpgradeProgressing",
 		"ControlPlaneUpgradeDegraded",
 	),
-	"NodePool":               sets.New[string]("NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing"),
-	"NodePoolUpgradeRequest": sets.New[string]("Scheduled", "Accepted", "Progressing", "Completed", "Failed"),
+	"NodePool": sets.New[string]("NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing",
+		"NodePoolUpgradeScheduled", "NodePoolUpgradeProgressing", "NodePoolUpgradeDegraded"),
 	// Test-only resource type used in orlop tests
 	"Object": sets.New[string]("Ready", "Available"),
 }

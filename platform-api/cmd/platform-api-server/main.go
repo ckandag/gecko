@@ -201,9 +201,10 @@ func main() {
 		log.Fatalf("Failed to create NodePool upgrade validator: %v", err)
 	}
 	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
-		RoleExists:                     stores.RoleExists,
-		PlatformRoleExists:             stores.PlatformRoleExists,
-		ValidateNodePoolUpgradeRequest: upgradeValidator.Validate,
+		RoleExists:              stores.RoleExists,
+		PlatformRoleExists:      stores.PlatformRoleExists,
+		DefaultNodePoolUpgrade:  upgradeValidator.Default,
+		ValidateNodePoolUpgrade: upgradeValidator.Validate,
 	})
 
 	publicResources := getPublicResources()

@@ -678,79 +678,15 @@ func TestApplyStatusConditions_ObservedVersionChangeIsPersisted(t *testing.T) {
 	require.Equal(t, "4.16.1", np.Status.CurrentVersion)
 }
 
-func TestApplyStatusConditions_UpgradeConditionTracksRollout(t *testing.T) {
+func TestSetWaitingNPConditionsPreservesUpgradeStatus(t *testing.T) {
 	np := testNodePool("4.16.1")
 	np.Status.CurrentVersion = "4.16.0"
-	cluster := testCluster(true, true)
-	npKey := nodePoolResourceKey(cluster, np)
-	status := &transport.Status{
-		Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
-		ResourceStatuses: map[string]map[string]string{
-			npKey: {
-				"readyCondition":            "False",
-				"allNodesHealthyCondition":  "False",
-				"allMachinesReadyCondition": "False",
-				"updatingVersionCondition":  "True",
-				"version":                   "4.16.0",
-			},
-		},
-	}
-	r := &Reconciler{}
-	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
-	upgrade := meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition)
-	require.NotNil(t, upgrade)
-	require.Equal(t, metav1.ConditionTrue, upgrade.Status)
-	require.Equal(t, "UpgradeInProgress", upgrade.Reason)
-	require.Contains(t, upgrade.Message, "4.16.0 to 4.16.1")
-
-	status.ResourceStatuses[npKey]["version"] = "4.16.1"
-	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
-	upgrade = meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition)
-	require.Equal(t, metav1.ConditionTrue, upgrade.Status)
-	require.Equal(t, "WaitingForNodePool", upgrade.Reason)
-
-	status.ResourceStatuses[npKey]["readyCondition"] = "True"
-	status.ResourceStatuses[npKey]["allNodesHealthyCondition"] = "True"
-	status.ResourceStatuses[npKey]["allMachinesReadyCondition"] = "True"
-	status.ResourceStatuses[npKey]["updatingVersionCondition"] = "False"
-	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
-	require.Nil(t, meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition))
-	require.False(t, r.applyStatusConditions(np, string(cluster.UID), status))
-
-	status.ResourceStatuses[npKey]["allNodesHealthyCondition"] = "False"
-	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
-	require.Nil(t, meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition))
-}
-
-func TestApplyStatusConditions_NoUpgradeConditionDuringCreation(t *testing.T) {
-	np := testNodePool("4.16.0")
-	cluster := testCluster(true, true)
-	npKey := nodePoolResourceKey(cluster, np)
-	status := &transport.Status{
-		Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
-		ResourceStatuses: map[string]map[string]string{
-			npKey: {
-				"readyCondition":            "False",
-				"allNodesHealthyCondition":  "False",
-				"allMachinesReadyCondition": "False",
-				"updatingVersionCondition":  "True",
-				"version":                   "4.16.0",
-			},
-		},
-	}
-	r := &Reconciler{}
-	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
-	require.Nil(t, meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition))
-}
-
-func TestSetWaitingNPConditions_UpgradeConditionTracksTarget(t *testing.T) {
-	np := testNodePool("4.16.1")
-	np.Status.CurrentVersion = "4.16.0"
+	np.Status.Upgrade = &privatev1.NodePoolUpgradeResult{TargetVersion: "4.16.1"}
+	upgrade := metav1.Condition{Type: "NodePoolUpgradeProgressing", Status: metav1.ConditionTrue, Reason: "UpgradeAccepted", LastTransitionTime: metav1.Now()}
+	np.Status.Conditions = append(np.Status.Conditions, upgrade)
 	require.True(t, setWaitingNPConditions(np, "VersionResolutionNotReady", "Waiting for nodepool version resolution"))
-	upgrade := meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition)
-	require.NotNil(t, upgrade)
-	require.Equal(t, metav1.ConditionTrue, upgrade.Status)
-	require.Equal(t, "UpgradeInProgress", upgrade.Reason)
+	require.Equal(t, &upgrade, meta.FindStatusCondition(np.Status.Conditions, "NodePoolUpgradeProgressing"))
+	require.Equal(t, "4.16.1", np.Status.Upgrade.TargetVersion)
 }
 
 // ---------------------------------------------------------------------------

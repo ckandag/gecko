@@ -311,6 +311,27 @@ properties:
         - key
         - effect
         x-kubernetes-list-type: map
+      upgrade:
+        description: |-
+          upgrade requests a one-time upgrade of this pool. Omit this field to keep
+          the existing installation behavior. Set it to null to cancel a pending
+          upgrade before it is accepted for execution.
+        nullable: true
+        properties:
+          startTime:
+            description: |-
+              startTime is the earliest time the upgrade may start. When omitted, the
+              upgrade is eligible immediately.
+            format: date-time
+            type: string
+          targetVersion:
+            description: |-
+              targetVersion is the exact version to install. When omitted, it defaults
+              to the observed control-plane version when this upgrade is submitted.
+            maxLength: 63
+            minLength: 1
+            type: string
+        type: object
     required:
     - clusterID
     - platform
@@ -389,6 +410,54 @@ properties:
           currentVersion is the last OpenShift version HyperShift reports as applied
           to this NodePool. It does not advance merely because an upgrade was requested.
         type: string
+      upgrade:
+        description: |-
+          upgrade reports the current or most recent upgrade, including its target,
+          execution times, and failure details.
+        properties:
+          acceptedTime:
+            description: |-
+              acceptedTime records when the target was accepted for execution. Pending
+              upgrade settings can no longer be changed after acceptance.
+            format: date-time
+            type: string
+          completedTime:
+            description: completedTime records successful completion of the version
+              and health checks.
+            format: date-time
+            type: string
+          failureMessage:
+            description: failureMessage describes why the upgrade could not proceed.
+            maxLength: 1024
+            type: string
+          failureReason:
+            description: failureReason is a machine-readable explanation of a rejected
+              or failed upgrade.
+            maxLength: 63
+            type: string
+          intentID:
+            description: |-
+              intentID identifies the upgrade settings observed by the controller, so
+              unrelated spec changes do not restart a completed or rejected upgrade.
+              Private controller bookkeeping; not exposed to customers.
+            maxLength: 80
+            type: string
+          requestedTime:
+            description: requestedTime records when the upgrade was first observed.
+            format: date-time
+            type: string
+          startedTime:
+            description: startedTime records when the target was submitted for rollout.
+            format: date-time
+            type: string
+          targetVersion:
+            description: targetVersion is the version selected for this upgrade.
+            maxLength: 63
+            minLength: 1
+            type: string
+        required:
+        - targetVersion
+        type: object
       versionResolution:
         description: |-
           VersionResolution is written by the nodepool-vr controller.

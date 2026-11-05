@@ -23,10 +23,9 @@ import (
 )
 
 const (
-	adapterName                         = "nodepool-controller"
-	nodePoolUpgradeProgressingCondition = "NodePoolUpgradeProgressing"
-	requeuePending                      = 15 * time.Second
-	requeueStable                       = 5 * time.Minute
+	adapterName    = "nodepool-controller"
+	requeuePending = 15 * time.Second
+	requeueStable  = 5 * time.Minute
 )
 
 // Reconciler implements the nodepool controller reconciliation loop.
@@ -328,8 +327,7 @@ func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool
 		Message:            message,
 		ObservedGeneration: gen,
 	})
-	d := setNodePoolUpgradeProgressing(np, false)
-	return a || b || c || d
+	return a || b || c
 }
 
 // applyStatusConditions derives conditions from the resource status and writes them to the nodepool.
@@ -356,8 +354,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 			Reason:             "AsExpected",
 			ObservedGeneration: gen,
 		})
-		d := setNodePoolUpgradeProgressing(np, false)
-		return a || b || c || d
+		return a || b || c
 	}
 
 	// Extract conditions from top-level applied conditions.
@@ -456,39 +453,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		Reason:             progressingReason,
 		ObservedGeneration: gen,
 	})
-	e := setNodePoolUpgradeProgressing(np,
-		availableStatus == "True" && healthStatus == metav1.ConditionTrue && progressingStatus == metav1.ConditionFalse)
-	return a || b || c || d || e || versionChanged
-}
-
-// setNodePoolUpgradeProgressing tracks an active version change separately from
-// general NodePool health. It is absent during creation and after completion.
-func setNodePoolUpgradeProgressing(np *privatev1.NodePool, rolloutComplete bool) bool {
-	current := np.Status.CurrentVersion
-	if current == "" {
-		return false
-	}
-
-	previous := meta.FindStatusCondition(np.Status.Conditions, nodePoolUpgradeProgressingCondition)
-	condition := metav1.Condition{
-		Type:               nodePoolUpgradeProgressingCondition,
-		ObservedGeneration: np.Generation,
-	}
-	switch {
-	case current != np.Spec.Release.Version:
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "UpgradeInProgress"
-		condition.Message = fmt.Sprintf("Upgrading NodePool from %s to %s", current, np.Spec.Release.Version)
-	case previous == nil || previous.Status != metav1.ConditionTrue:
-		return false
-	case !rolloutComplete:
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "WaitingForNodePool"
-		condition.Message = fmt.Sprintf("Waiting for NodePool rollout to %s to complete", np.Spec.Release.Version)
-	default:
-		return meta.RemoveStatusCondition(&np.Status.Conditions, nodePoolUpgradeProgressingCondition)
-	}
-	return meta.SetStatusCondition(&np.Status.Conditions, condition)
+	return a || b || c || d || versionChanged
 }
 
 // defaultReplicas is the hardcoded default for this POC.

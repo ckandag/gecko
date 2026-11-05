@@ -13,6 +13,4 @@ spec:
     - cluster.get
     - nodepool.list
     - nodepool.get
-    - nodepoolupgraderequest.list
-    - nodepoolupgraderequest.get
 {{- end }}

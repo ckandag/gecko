@@ -123,3 +123,12 @@ continue to be managed through Helm and the private API.
 The existing public metadata filter applies unchanged (private-prefixed metadata
 and finalizers are removed). Non-private metadata, including Argo CD annotations,
 can still be returned; `gcphcpctl platformrole` minimizes metadata in its output.
+
+## NodePool upgrades
+
+Request immediate or one-time scheduled upgrades through `NodePool.spec.upgrade`.
+The upgrade coordinator submits eligible targets through the existing
+`spec.release.version` installation flow. `status.currentVersion` reports the
+observed version, and `status.upgrade` plus upgrade conditions report progress.
+See [NodePool upgrade flow](../controllers/nodepoolupgrade/README.md) for
+request, watch, cancellation, and validation examples.
