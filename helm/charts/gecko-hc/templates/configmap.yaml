@@ -7,5 +7,5 @@ metadata:
     {{- include "gecko-hc.labels" . | nindent 4 }}
 data:
   customer-labels.json: |
-    {{- .Values.customerLabels | fromJson | toPrettyJson | nindent 4 }}
+    {{- .Values.customerLabels | mustFromJson | toPrettyJson | nindent 4 }}
 {{- end }}

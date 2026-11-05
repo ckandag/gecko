@@ -61,6 +61,11 @@ Create the name of the service account to use
 Validate required values.
 */}}
 {{- define "gecko-hc.validateValues" -}}
+{{- $labels := .Values.customerLabels | default "{}" | mustFromJson -}}
+{{- if and (not (kindIs "invalid" $labels)) (not (kindIs "map" $labels)) -}}
+{{- fail "customerLabels must be a JSON object" -}}
+{{- end -}}
+
 {{- $registry := trim (toString .Values.image.registry) -}}
 {{- if or (not $registry) (eq $registry "CHANGE_ME") -}}
 {{- fail "image.registry must be set (e.g. --set image.registry=us-docker.pkg.dev)" -}}
