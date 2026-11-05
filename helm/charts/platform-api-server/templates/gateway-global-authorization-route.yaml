@@ -27,7 +27,16 @@ spec:
     - matches:
         - path:
             type: RegularExpression
-            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[^/]+/(roles|rolebindings)(/[^/]+)?$'
+            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[a-z0-9.\-]+/roles$'
+        - path:
+            type: RegularExpression
+            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[a-z0-9.\-]+/roles/[a-z0-9.\-]+$'
+        - path:
+            type: RegularExpression
+            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[a-z0-9.\-]+/rolebindings$'
+        - path:
+            type: RegularExpression
+            value: '/apis/gcp\.managed\.openshift\.io/v1/namespaces/[a-z0-9.\-]+/rolebindings/[a-z0-9.\-]+$'
       backendRefs:
         - name: {{ .Values.gateway.service.name }}
           port: {{ if .Values.esp.enabled }}{{ .Values.esp.port }}{{ else }}{{ .Values.gateway.service.port }}{{ end }}
