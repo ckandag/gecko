@@ -1,0 +1,29 @@
+{{- if .Values.gateway.globalAuthorization.enabled }}
+{{- $hostname := required "gateway.globalAuthorization.hostname must be set when enabled" .Values.gateway.globalAuthorization.hostname -}}
+{{- $projectId := required "gateway.projectId must be set when global authorization is enabled" .Values.gateway.projectId -}}
+{{- $certificateName := required "gateway.globalAuthorization.certificate.name must be set when enabled" .Values.gateway.globalAuthorization.certificate.name -}}
+---
+apiVersion: certificatemanager.cnrm.cloud.google.com/v1beta1
+kind: CertificateManagerCertificateMapEntry
+metadata:
+  {{- $sanitized := $hostname | replace "." "-" }}
+  {{- if gt (len $sanitized) 63 }}
+  {{- $hash := $hostname | sha256sum | trunc 8 }}
+  {{- $prefix := $sanitized | trunc 54 | trimSuffix "-" }}
+  name: {{ printf "%s-%s" $prefix $hash }}
+  {{- else }}
+  name: {{ $sanitized }}
+  {{- end }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: global-authorization-certificate-map-entry
+spec:
+  mapRef:
+    external: {{ .Values.gateway.certificate.certificateMap.name }}
+  hostname: {{ $hostname | quote }}
+  certificatesRefs:
+    - external: {{ printf "projects/%s/locations/global/certificates/%s" $projectId $certificateName | quote }}
+  projectRef:
+    external: {{ $projectId | quote }}
+{{- end }}

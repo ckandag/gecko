@@ -125,6 +125,17 @@ gateway:
     name: platform-api-cert
     certificateMap:
       name: platform-gateway-certmap
+  # A second hostname for Role and RoleBinding operations. The routing DNS
+  # record is owned by Terraform, not by ExternalDNS. Each region needs its
+  # own DNS-authorized certificate before it can be promoted to leader.
+  globalAuthorization:
+    enabled: false
+    hostname: ""
+    certificate:
+      name: platform-api-global-authz-cert
+      # Full Certificate Manager DNS authorization resource name, provisioned
+      # in this regional project by infrastructure Terraform.
+      dnsAuthorization: ""
   # Cloud Armor: deploys a ComputeSecurityPolicy (WAF + rate limiting)
   # and a GCPBackendPolicy that binds it to the gateway service.
   cloudArmor:

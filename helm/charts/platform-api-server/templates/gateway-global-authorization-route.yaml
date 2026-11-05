@@ -1,0 +1,34 @@
+{{- if .Values.gateway.globalAuthorization.enabled }}
+{{- if not .Values.gateway.enabled }}
+{{- fail "gateway.enabled must be true when gateway.globalAuthorization.enabled is true" }}
+{{- end }}
+{{- $hostname := required "gateway.globalAuthorization.hostname must be set when enabled" .Values.gateway.globalAuthorization.hostname -}}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}-global-authz-route
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: global-authorization-route
+  annotations:
+    # ExternalDNS v0.15 otherwise publishes spec.hostnames as an A record.
+    # Terraform owns the stable CNAME, which changes on leadership transfer.
+    external-dns.alpha.kubernetes.io/controller: terraform
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.gateway.namespace }}
+      sectionName: https
+  hostnames:
+    - {{ $hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/apis/gcp\.managed\.openshift\.io/v1/namespaces/[^/]+/(roles|rolebindings)(/[^/]+)?$'
+      backendRefs:
+        - name: {{ .Values.gateway.service.name }}
+          port: {{ if .Values.esp.enabled }}{{ .Values.esp.port }}{{ else }}{{ .Values.gateway.service.port }}{{ end }}
+{{- end }}
