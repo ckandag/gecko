@@ -110,10 +110,9 @@ func New(c CompletedConfig) (*AggregatedServer, error) {
 
 	// Configure OpenAPI v2 and v3.
 	defNamer := apiopenapi.NewDefinitionNamer(scheme)
-	getDefinitions := buildOpenAPIDefinitions(scheme, c.Resources)
-	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(getDefinitions, defNamer)
+	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(buildOpenAPIDefinitions(scheme, c.Resources, true), defNamer)
 	serverConfig.OpenAPIConfig.Info.Title = "Gecko Aggregated API"
-	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(getDefinitions, defNamer)
+	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(buildOpenAPIDefinitions(scheme, c.Resources, false), defNamer)
 	serverConfig.OpenAPIV3Config.Info.Title = "Gecko Aggregated API"
 
 	// Register health checks.
