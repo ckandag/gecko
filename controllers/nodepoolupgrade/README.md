@@ -128,3 +128,10 @@ The Version catalog does not store Cincinnati upgrade edges. Catalog membership
 and version-step checks do not prove that a particular graph edge exists.
 Full graph eligibility, the notification pipeline, and upgrade metrics remain
 separate work.
+
+## Deployment health
+
+The controller exposes `/healthz` and `/readyz` on port 8081 by default. The Helm
+chart configures liveness and readiness probes against these handlers. Override
+`healthProbePort` in chart values to change the port, or use the controller's
+`--health-probe-bind-address` flag when running it directly.

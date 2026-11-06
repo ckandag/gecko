@@ -13,6 +13,7 @@ orlopURL: ""
 logLevel: info
 logFormat: json
 workers: 10
+healthProbePort: 8081
 
 serviceAccount:
   create: true

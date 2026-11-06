@@ -19,6 +19,8 @@ type RootFlags struct {
 	LogFormat string
 	OrlopURL  string
 	Workers   int
+	// HealthProbeBindAddress is opt-in; an empty value leaves probes disabled.
+	HealthProbeBindAddress string
 }
 
 // NewLogger creates a logger from root flags.
@@ -58,8 +60,9 @@ func (rf *RootFlags) NewManager(scheme *runtime.Scheme, log logger.Logger) (ctrl
 	}
 
 	return ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:         scheme,
-		LeaderElection: false,
+		Scheme:                 scheme,
+		LeaderElection:         false,
+		HealthProbeBindAddress: rf.HealthProbeBindAddress,
 	})
 }
 
