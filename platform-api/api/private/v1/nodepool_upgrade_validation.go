@@ -6,93 +6,88 @@ import (
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 )
 
-// Default pins an omitted upgrade target to the control-plane version at submission.
-func (p *NodePool) Default(ctx context.Context) error {
-	if p.Spec.Upgrade == nil || p.Spec.Upgrade.TargetVersion != nil {
-		return nil
-	}
-	if defaults := getValidatorDeps().DefaultNodePoolUpgrade; defaults != nil {
-		return defaults(ctx, p)
+func (p *NodePool) ValidateCreate(_ context.Context) error {
+	if p.Spec.Release.UpgradeStartTime != nil {
+		return fmt.Errorf("spec.release.upgradeStartTime may only be set after the NodePool has been installed")
 	}
 	return nil
 }
 
-func (p *NodePool) ValidateCreate(ctx context.Context) error {
-	if p.Spec.Upgrade == nil {
-		return nil
-	}
-	return fmt.Errorf("spec.upgrade may only be set after the NodePool has been installed")
-}
-
-// ValidateUpdate checks only changed upgrade settings and release transitions.
-// Scaling and controller status updates do not repeat storage-backed admission.
+// ValidateUpdate checks release intent changes without revalidating unrelated
+// scaling or controller status writes. The persisted status supplies the lock.
 func (p *NodePool) ValidateUpdate(ctx context.Context, oldObj runtime.Object) error {
 	old, ok := oldObj.(*NodePool)
 	if !ok {
 		return fmt.Errorf("expected old object to be *NodePool, got %T", oldObj)
 	}
-	upgradeChanged := !apiequality.Semantic.DeepEqual(p.Spec.Upgrade, old.Spec.Upgrade)
-	releaseChanged := p.Spec.Release.Version != old.Spec.Release.Version
-	if NodePoolUpgradeActive(old.Status.Upgrade) {
-		if upgradeChanged {
-			return fmt.Errorf("spec.upgrade cannot be changed or canceled while an accepted upgrade is active")
-		}
-		if releaseChanged && p.Spec.Release.Version != old.Status.Upgrade.TargetVersion {
-			return fmt.Errorf("spec.release.version must match the accepted upgrade target")
-		}
-	}
-	if !upgradeChanged && !releaseChanged {
+	if apiequality.Semantic.DeepEqual(p.Spec.Release, old.Spec.Release) {
 		return nil
 	}
-	if p.Spec.Upgrade != nil {
-		if p.Spec.Upgrade.TargetVersion == nil {
-			return fmt.Errorf("spec.upgrade.targetVersion must be set or defaulted from the observed control-plane version")
-		}
-		if _, err := utilversion.ParseSemantic(*p.Spec.Upgrade.TargetVersion); err != nil {
-			return fmt.Errorf("spec.upgrade.targetVersion must be a semantic version")
-		}
-		if p.Spec.Upgrade.StartTime != nil && p.Spec.Upgrade.StartTime.IsZero() {
-			return fmt.Errorf("spec.upgrade.startTime must be a valid timestamp")
-		}
-		if releaseChanged && !NodePoolUpgradeActive(old.Status.Upgrade) {
-			return fmt.Errorf("spec.release.version cannot be changed while an upgrade is pending; change or cancel spec.upgrade first")
-		}
+	if NodePoolUpgradeActive(old) {
+		return fmt.Errorf("spec.release cannot be changed while an accepted upgrade is active")
 	}
-	// Removal cancels a pending intent; it must not require a healthy cluster.
-	if !releaseChanged && p.Spec.Upgrade == nil {
-		return nil
+	if p.Spec.Release.UpgradeStartTime != nil && p.Spec.Release.UpgradeStartTime.IsZero() {
+		return fmt.Errorf("spec.release.upgradeStartTime must be a valid timestamp")
 	}
-	if old.Status.CurrentVersion == "" {
-		if upgradeChanged && p.Spec.Upgrade != nil {
-			return fmt.Errorf("the NodePool version must be observed before requesting an upgrade")
+	if old.Status.Version == "" {
+		if p.Spec.Release.UpgradeStartTime != nil {
+			return fmt.Errorf("spec.release.upgradeStartTime may only be set after the NodePool has been installed")
 		}
 		return nil // Preserve initial installation and existing configuration updates.
 	}
-	if old.Spec.Release.Version != old.Status.CurrentVersion && releaseChanged {
-		return fmt.Errorf("a NodePool release change is already in progress")
+	if p.Spec.Release.Version == old.Status.Version {
+		if p.Spec.Release.UpgradeStartTime != nil && !apiequality.Semantic.DeepEqual(p.Spec.Release.UpgradeStartTime, old.Spec.Release.UpgradeStartTime) {
+			return fmt.Errorf("spec.release.upgradeStartTime requires a version upgrade")
+		}
+		return nil // Returning to the observed version cancels an unaccepted request.
 	}
-	target := p.Spec.Release.Version
-	if upgradeChanged && p.Spec.Upgrade != nil {
-		target = *p.Spec.Upgrade.TargetVersion
+	if _, err := utilversion.ParseSemantic(p.Spec.Release.Version); err != nil {
+		return fmt.Errorf("spec.release.version must be a semantic version")
 	}
 	if validate := getValidatorDeps().ValidateNodePoolUpgrade; validate != nil {
 		candidate := p.DeepCopy()
 		candidate.Status = old.Status
-		candidate.Spec.Release.Version = old.Spec.Release.Version
-		return validate(ctx, candidate, target)
+		return validate(ctx, candidate, p.Spec.Release.Version)
 	}
 	return nil
 }
 
 func (p *NodePool) ValidateDelete(_ context.Context) error { return nil }
 
-// NodePoolUpgradeActive reports acceptance that has not completed or failed.
-func NodePoolUpgradeActive(result *NodePoolUpgradeResult) bool {
-	return result != nil && result.AcceptedTime != nil && result.CompletedTime == nil && result.FailureReason == nil
+// These conditions describe coordinator approval and dispatch without a separate
+// upgrade request or controller bookkeeping object in the NodePool API.
+const (
+	NodePoolUpgradeScheduled   = "NodePoolUpgradeScheduled"
+	NodePoolUpgradeProgressing = "NodePoolUpgradeProgressing"
+	NodePoolUpgradeDegraded    = "NodePoolUpgradeDegraded"
+	NodePoolUpgradeSubmitted   = "NodePoolUpgradeSubmitted"
+)
+
+// NodePoolReleaseApproved permits initial installation and maintenance of the
+// observed release. A new release requires persisted coordinator approval.
+func NodePoolReleaseApproved(pool *NodePool) bool {
+	return pool.Status.Version == "" || pool.Spec.Release.Version == pool.Status.Version || NodePoolUpgradeActive(pool)
+}
+
+// NodePoolUpgradeActive is also the admission lock on release settings. It must
+// survive unrelated generation changes (for example scaling). Admission forbids
+// release changes while this condition is true, and approval status writes use
+// resource-version preconditions, so an old approval cannot authorize a changed
+// release. Health/completion observations still require the current generation.
+func NodePoolUpgradeActive(pool *NodePool) bool {
+	return meta.IsStatusConditionTrue(pool.Status.Conditions, NodePoolUpgradeProgressing)
+}
+
+// NodePoolUpgradeSubmissionStarted treats Unknown conservatively: the process
+// may have stopped after dispatch but before it recorded acknowledgement.
+func NodePoolUpgradeSubmissionStarted(pool *NodePool) bool {
+	condition := meta.FindStatusCondition(pool.Status.Conditions, NodePoolUpgradeSubmitted)
+	return condition != nil && condition.Status != metav1.ConditionFalse
 }
 
 // ValidateNodePoolUpgradeTarget validates an upgrade using only mirrored platform data.
@@ -100,13 +95,13 @@ func ValidateNodePoolUpgradeTarget(pool *NodePool, cluster *Cluster, release *Ve
 	if !pool.DeletionTimestamp.IsZero() || !cluster.DeletionTimestamp.IsZero() {
 		return fmt.Errorf("the NodePool or Cluster is being deleted")
 	}
-	if pool.Status.CurrentVersion == "" || cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
+	if pool.Status.Version == "" || cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
 		return fmt.Errorf("nodepool and control-plane versions must be observed before requesting an upgrade")
 	}
-	if pool.Spec.Release.Version != pool.Status.CurrentVersion || meta.IsStatusConditionTrue(pool.Status.Conditions, "NodePoolProgressing") {
+	if meta.IsStatusConditionTrue(pool.Status.Conditions, "NodePoolProgressing") {
 		return fmt.Errorf("the NodePool already has a release change in progress")
 	}
-	current, err := utilversion.ParseSemantic(pool.Status.CurrentVersion)
+	current, err := utilversion.ParseSemantic(pool.Status.Version)
 	if err != nil {
 		return fmt.Errorf("the observed NodePool version is invalid")
 	}

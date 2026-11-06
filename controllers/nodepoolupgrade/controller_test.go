@@ -10,6 +10,7 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,10 +36,9 @@ func testObjects() (*privatev1.NodePool, *privatev1.Cluster, *privatev1.Version)
 	pool := &privatev1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: testPool, Namespace: testNamespace, Generation: 1},
 		Spec: privatev1.NodePoolSpec{ClusterID: testCluster,
-			Release: privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"},
-			Upgrade: &privatev1.NodePoolUpgradeSpec{TargetVersion: ptr.To("4.22.16")},
+			Release: privatev1.ReleaseSpec{Version: "4.22.16", ChannelGroup: "stable"},
 		},
-		Status: privatev1.NodePoolStatus{CurrentVersion: "4.22.14"},
+		Status: privatev1.NodePoolStatus{Version: "4.22.14"},
 	}
 	healthy(pool)
 	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: testCluster, Namespace: testNamespace}}
@@ -87,135 +87,140 @@ func getPool(t *testing.T, c client.Client) *privatev1.NodePool {
 	return pool
 }
 
-func TestScheduledUpgradeWaitsWithoutChangingRelease(t *testing.T) {
+func TestScheduledUpgradeWaitsWithoutChangingDesiredRelease(t *testing.T) {
 	pool, cluster, release := testObjects()
 	start := metav1.NewTime(testNow.Add(24 * time.Hour))
-	pool.Spec.Upgrade.StartTime = &start
+	pool.Spec.Release.UpgradeStartTime = &start
 	r, c := testReconciler(t, pool, cluster, release)
-	result := reconcilePool(t, r)
-	require.Equal(t, maxScheduleWait, result.RequeueAfter)
+	require.Equal(t, maxScheduleWait, reconcilePool(t, r).RequeueAfter)
 	updated := getPool(t, c)
-	require.Equal(t, "4.22.14", updated.Spec.Release.Version)
-	require.Nil(t, updated.Status.Upgrade.AcceptedTime)
+	require.True(t, apiequality.Semantic.DeepEqual(pool.Spec, updated.Spec))
+	require.Equal(t, "4.22.14", updated.Status.Version)
+	require.False(t, privatev1.NodePoolReleaseApproved(updated))
 	require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionScheduled))
-	// Scaling changes the generation, but does not change the pending intent.
-	requested := updated.Status.Upgrade.RequestedTime.DeepCopy()
+	transition := meta.FindStatusCondition(updated.Status.Conditions, conditionScheduled).LastTransitionTime
 	updated.Spec.NodeCount = ptr.To(int32(3))
 	updated.Generation++
 	require.NoError(t, c.Update(t.Context(), updated))
 	reconcilePool(t, r)
 	updated = getPool(t, c)
-	require.Equal(t, requested, updated.Status.Upgrade.RequestedTime)
-	require.Equal(t, int32(3), *updated.Spec.NodeCount)
-	require.Equal(t, "4.22.14", updated.Spec.Release.Version)
+	require.Equal(t, transition, meta.FindStatusCondition(updated.Status.Conditions, conditionScheduled).LastTransitionTime)
+	require.Equal(t, updated.Generation, meta.FindStatusCondition(updated.Status.Conditions, conditionScheduled).ObservedGeneration)
 	r.now = func() time.Time { return start.Time }
-	healthy(updated)
-	require.NoError(t, c.Status().Update(t.Context(), updated))
-	require.Equal(t, retryInterval, reconcilePool(t, r).RequeueAfter)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.AcceptedTime)
-}
-
-func TestUpgradeUsesExistingReleaseFlowAndWaitsForHealthyFeedback(t *testing.T) {
-	pool, cluster, release := testObjects()
-	r, c := testReconciler(t, pool, cluster, release)
-	require.Equal(t, retryInterval, reconcilePool(t, r).RequeueAfter)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.AcceptedTime)
-	require.Equal(t, "4.22.14", getPool(t, c).Spec.Release.Version)
-	// An unrelated scale operation after acceptance delays submission without
-	// rejecting the accepted target.
-	updated := getPool(t, c)
-	meta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{Type: "NodePoolProgressing", Status: metav1.ConditionTrue, Reason: "Scaling", ObservedGeneration: updated.Generation})
-	require.NoError(t, c.Status().Update(t.Context(), updated))
 	require.Equal(t, waitInterval, reconcilePool(t, r).RequeueAfter)
 	updated = getPool(t, c)
-	require.Nil(t, updated.Status.Upgrade.FailureReason)
-	require.Equal(t, "4.22.14", updated.Spec.Release.Version)
 	healthy(updated)
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, r)
-	updated = getPool(t, c)
-	require.Equal(t, "4.22.16", updated.Spec.Release.Version)
-	require.Equal(t, "4.22.14", updated.Status.CurrentVersion)
-	// Restart after the release patch but before the started timestamp was persisted.
+	require.True(t, privatev1.NodePoolReleaseApproved(getPool(t, c)))
+}
+
+func TestUpgradeConditionsResumeAcrossRestartAndScaling(t *testing.T) {
+	pool, cluster, release := testObjects()
+	r, c := testReconciler(t, pool, cluster, release)
+	require.Equal(t, retryInterval, reconcilePool(t, r).RequeueAfter)
+	updated := getPool(t, c)
+	require.True(t, privatev1.NodePoolUpgradeActive(updated))
+	require.True(t, apiequality.Semantic.DeepEqual(pool.Spec, updated.Spec))
+	approved := meta.FindStatusCondition(updated.Status.Conditions, conditionProgressing).LastTransitionTime
+	updated.Spec.NodeCount = ptr.To(int32(3))
+	updated.Generation++
+	require.NoError(t, c.Update(t.Context(), updated))
+	// Scaling must not discard approval or permit a conflicting release write.
+	require.True(t, privatev1.NodePoolReleaseApproved(updated))
+	changed := updated.DeepCopy()
+	changed.Spec.Release.Version = "4.22.17"
+	require.ErrorContains(t, changed.ValidateUpdate(t.Context(), updated), "accepted upgrade is active")
 	restarted := NewReconciler(c)
 	restarted.now = r.now
 	reconcilePool(t, restarted)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.StartedTime)
 	updated = getPool(t, c)
-	updated.Status.CurrentVersion = "4.22.16"
-	meta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{Type: "NodePoolHealthy", Status: metav1.ConditionFalse, Reason: "Updating", ObservedGeneration: updated.Generation})
+	require.Equal(t, approved, meta.FindStatusCondition(updated.Status.Conditions, conditionProgressing).LastTransitionTime)
+	updated.Status.Version = "4.22.16"
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, restarted)
-	require.Nil(t, getPool(t, c).Status.Upgrade.CompletedTime)
+	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)), "stale healthy conditions must not complete an upgrade")
 	updated = getPool(t, c)
 	healthy(updated)
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, restarted)
 	completed := getPool(t, c)
-	require.NotNil(t, completed.Status.Upgrade.CompletedTime)
-	require.False(t, meta.IsStatusConditionTrue(completed.Status.Conditions, conditionProgressing))
-	require.False(t, meta.IsStatusConditionTrue(completed.Status.Conditions, conditionDegraded))
+	require.False(t, privatev1.NodePoolUpgradeActive(completed))
+	require.Equal(t, "UpgradeCompleted", meta.FindStatusCondition(completed.Status.Conditions, conditionProgressing).Reason)
 	rv := completed.ResourceVersion
 	reconcilePool(t, restarted)
-	require.Equal(t, rv, getPool(t, c).ResourceVersion, "completed upgrades must reconcile idempotently")
+	require.Equal(t, rv, getPool(t, c).ResourceVersion)
+	// The next desired version must not reuse the completed upgrade's approval.
+	completed.Spec.Release.Version = "4.22.17"
+	completed.Generation++
+	require.NoError(t, c.Update(t.Context(), completed))
+	require.False(t, privatev1.NodePoolReleaseApproved(completed))
 }
 
-func TestMatchingVersionWithStaleHealthDoesNotComplete(t *testing.T) {
-	pool, cluster, release := testObjects()
-	r, c := testReconciler(t, pool, cluster, release)
-	reconcilePool(t, r)
-	reconcilePool(t, r)
-	updated := getPool(t, c)
-	updated.Generation++
-	require.NoError(t, c.Update(t.Context(), updated))
-	updated.Status.CurrentVersion = "4.22.16"
-	require.NoError(t, c.Status().Update(t.Context(), updated))
-	reconcilePool(t, r)
-	require.Nil(t, getPool(t, c).Status.Upgrade.CompletedTime)
-}
-
-func TestDelayedAcceptedUpgradeDoesNotDowngradeAdvancedPool(t *testing.T) {
+func TestPreSubmissionFailureUnlocksReleaseForCancellation(t *testing.T) {
 	pool, cluster, release := testObjects()
 	r, c := testReconciler(t, pool, cluster, release)
 	reconcilePool(t, r)
 	updated := getPool(t, c)
-	updated.Spec.Release.Version = "4.22.17"
-	require.NoError(t, c.Update(t.Context(), updated))
-	updated.Status.CurrentVersion = "4.22.17"
-	healthy(updated)
+	meta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{Type: "NodePoolVersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotAvailable", ObservedGeneration: updated.Generation})
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, r)
 	updated = getPool(t, c)
-	require.Equal(t, "4.22.17", updated.Spec.Release.Version)
-	require.Equal(t, "TargetRejected", *updated.Status.Upgrade.FailureReason)
+	require.False(t, privatev1.NodePoolUpgradeActive(updated))
+	require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionDegraded))
+	require.False(t, privatev1.NodePoolUpgradeSubmissionStarted(updated))
+	rv := updated.ResourceVersion
+	reconcilePool(t, r)
+	require.Equal(t, rv, getPool(t, c).ResourceVersion)
+	previous := updated.DeepCopy()
+	updated.Spec.Release.Version = updated.Status.Version
+	updated.Spec.Release.UpgradeStartTime = nil
+	require.NoError(t, updated.ValidateUpdate(t.Context(), previous))
+	updated.Generation++
+	require.NoError(t, c.Update(t.Context(), updated))
+	reconcilePool(t, r)
+	updated = getPool(t, c)
+	require.False(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionDegraded))
+	require.Equal(t, "UpgradeCanceled", meta.FindStatusCondition(updated.Status.Conditions, conditionProgressing).Reason)
+	require.True(t, privatev1.NodePoolReleaseApproved(updated))
+}
+
+func TestUncertainSubmissionKeepsReleaseLocked(t *testing.T) {
+	pool, cluster, release := testObjects()
+	r, c := testReconciler(t, pool, cluster, release)
+	reconcilePool(t, r)
+	updated := getPool(t, c)
+	meta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown, Reason: "Dispatching", ObservedGeneration: updated.Generation})
+	meta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{Type: "NodePoolVersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotAvailable", ObservedGeneration: updated.Generation})
+	require.NoError(t, c.Status().Update(t.Context(), updated))
+	reconcilePool(t, r)
+	updated = getPool(t, c)
+	require.True(t, privatev1.NodePoolUpgradeActive(updated))
+	reverted := updated.DeepCopy()
+	reverted.Spec.Release.Version = reverted.Status.Version
+	require.ErrorContains(t, reverted.ValidateUpdate(t.Context(), updated), "accepted upgrade is active")
 }
 
 func TestTargetRevalidationAndTerminalReconciliation(t *testing.T) {
-	tests := []struct {
-		name   string
-		change func(*privatev1.NodePool, *privatev1.Cluster, *privatev1.Version)
-	}{
-		{"above control plane", func(_ *privatev1.NodePool, c *privatev1.Cluster, _ *privatev1.Version) {
-			c.Status.HostedClusterResult.Version = "4.22.14"
-		}},
-		{"outside channel", func(_ *privatev1.NodePool, _ *privatev1.Cluster, v *privatev1.Version) {
-			v.Spec.ChannelGroups = []string{"fast"}
-		}},
-		{"unsupported step", func(p *privatev1.NodePool, c *privatev1.Cluster, v *privatev1.Version) {
-			p.Spec.Upgrade.TargetVersion = ptr.To("4.24.1")
-			c.Status.HostedClusterResult.Version = "4.24.1"
-			v.Name = "4.24.1"
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, change := range []string{"control plane", "channel", "step"} {
+		t.Run(change, func(t *testing.T) {
 			pool, cluster, release := testObjects()
-			tt.change(pool, cluster, release)
+			switch change {
+			case "control plane":
+				cluster.Status.HostedClusterResult.Version = "4.22.14"
+			case "channel":
+				release.Spec.ChannelGroups = []string{"fast"}
+			case "step":
+				pool.Spec.Release.Version = "4.24.1"
+				cluster.Status.HostedClusterResult.Version = "4.24.1"
+				release.Name = "4.24.1"
+			}
 			r, c := testReconciler(t, pool, cluster, release)
 			reconcilePool(t, r)
 			updated := getPool(t, c)
-			require.Equal(t, "4.22.14", updated.Spec.Release.Version)
-			require.NotNil(t, updated.Status.Upgrade.FailureReason)
+			require.True(t, apiequality.Semantic.DeepEqual(pool.Spec, updated.Spec))
+			require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionDegraded))
+			require.False(t, privatev1.NodePoolReleaseApproved(updated))
 			rv := updated.ResourceVersion
 			reconcilePool(t, r)
 			require.Equal(t, rv, getPool(t, c).ResourceVersion)
@@ -223,94 +228,41 @@ func TestTargetRevalidationAndTerminalReconciliation(t *testing.T) {
 	}
 }
 
-func TestPendingUpgradeCancellationAndReplacement(t *testing.T) {
+func TestPendingUpgradeCancellationAndResubmission(t *testing.T) {
 	pool, cluster, release := testObjects()
-	start := metav1.NewTime(testNow.Add(time.Hour))
-	pool.Spec.Upgrade.StartTime = &start
+	pool.Spec.Release.UpgradeStartTime = ptr.To(metav1.NewTime(testNow.Add(time.Hour)))
 	r, c := testReconciler(t, pool, cluster, release)
 	reconcilePool(t, r)
 	updated := getPool(t, c)
-	updated.Spec.Upgrade = nil
+	updated.Spec.Release.Version = updated.Status.Version
+	updated.Spec.Release.UpgradeStartTime = nil
+	updated.Generation++
 	require.NoError(t, c.Update(t.Context(), updated))
 	reconcilePool(t, r)
 	updated = getPool(t, c)
-	require.Nil(t, updated.Status.Upgrade.IntentID)
-	require.Equal(t, "4.22.14", updated.Spec.Release.Version)
 	require.False(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionScheduled))
-	updated.Spec.Upgrade = pool.Spec.Upgrade.DeepCopy()
-	updated.Spec.Upgrade.StartTime = nil
+	require.True(t, privatev1.NodePoolReleaseApproved(updated))
+	updated.Spec.Release.Version = "4.22.16"
+	updated.Generation++
 	require.NoError(t, c.Update(t.Context(), updated))
-	reconcilePool(t, r)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.AcceptedTime)
-}
-
-func TestRejectedUpgradeCanBeClearedAndResubmitted(t *testing.T) {
-	pool, cluster, release := testObjects()
-	release.Spec.ChannelGroups = []string{"fast"}
-	r, c := testReconciler(t, pool, cluster, release)
-	reconcilePool(t, r)
-	updated := getPool(t, c)
-	require.NotNil(t, updated.Status.Upgrade.FailureReason)
-	updated.Spec.Upgrade = nil
-	require.NoError(t, c.Update(t.Context(), updated))
-	reconcilePool(t, r)
-	updated = getPool(t, c)
-	require.Nil(t, updated.Status.Upgrade.IntentID)
-	require.NotNil(t, updated.Status.Upgrade.FailureReason, "retain the last result until a new request arrives")
-	// The target becomes eligible while the rejected intent is absent.
-	require.NoError(t, c.Get(t.Context(), types.NamespacedName{Name: release.Name}, release))
-	release.Spec.ChannelGroups = []string{"stable"}
-	require.NoError(t, c.Update(t.Context(), release))
-	updated.Spec.Upgrade = pool.Spec.Upgrade.DeepCopy()
-	require.NoError(t, c.Update(t.Context(), updated))
-	reconcilePool(t, r)
-	updated = getPool(t, c)
-	require.Nil(t, updated.Status.Upgrade.FailureReason)
-	require.NotNil(t, updated.Status.Upgrade.AcceptedTime)
-}
-
-func TestDefaultTargetIsPinnedBeforeScheduling(t *testing.T) {
-	pool, cluster, release := testObjects()
-	pool.Spec.Upgrade.TargetVersion = nil
-	pool.Spec.Upgrade.StartTime = ptr.To(metav1.NewTime(testNow.Add(time.Hour)))
-	r, c := testReconciler(t, pool, cluster, release)
-	reconcilePool(t, r)
-	updated := getPool(t, c)
-	require.Equal(t, "4.22.17", *updated.Spec.Upgrade.TargetVersion)
-	require.Equal(t, "4.22.14", updated.Spec.Release.Version)
-	require.Nil(t, updated.Status.Upgrade)
-	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
-	cluster.Status.HostedClusterResult.Version = "4.22.18"
-	require.NoError(t, c.Status().Update(t.Context(), cluster))
-	reconcilePool(t, r)
-	updated = getPool(t, c)
-	require.Equal(t, "4.22.17", *updated.Spec.Upgrade.TargetVersion)
-	require.Equal(t, "4.22.17", updated.Status.Upgrade.TargetVersion)
-	require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionScheduled))
-}
-
-func TestNoUpgradeIntentLeavesInstallationUntouched(t *testing.T) {
-	pool, cluster, release := testObjects()
-	pool.Spec.Upgrade = nil
-	r, c := testReconciler(t, pool, cluster, release)
-	before := getPool(t, c)
-	reconcilePool(t, r)
-	require.Equal(t, before, getPool(t, c))
-}
-
-func TestExistingDirectReleaseUpdatesAreObserved(t *testing.T) {
-	pool, cluster, release := testObjects()
-	pool.Spec.Upgrade = nil
-	pool.Spec.Release.Version = "4.22.16"
-	r, c := testReconciler(t, pool, cluster, release)
-	reconcilePool(t, r)
-	updated := getPool(t, c)
-	require.Equal(t, "4.22.16", updated.Status.Upgrade.TargetVersion)
-	require.NotNil(t, updated.Status.Upgrade.StartedTime)
-	updated.Status.CurrentVersion = "4.22.16"
+	healthy(updated)
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, r)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.CompletedTime)
+	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+}
+
+func TestInitialInstallationAndObservedReleaseAreUntouched(t *testing.T) {
+	for _, current := range []string{"", "4.22.16"} {
+		t.Run(current, func(t *testing.T) {
+			pool, cluster, release := testObjects()
+			pool.Status.Version = current
+			r, c := testReconciler(t, pool, cluster, release)
+			before := getPool(t, c)
+			reconcilePool(t, r)
+			require.Equal(t, before, getPool(t, c))
+			require.True(t, privatev1.NodePoolReleaseApproved(pool))
+		})
+	}
 }
 
 type failingClient struct {
@@ -355,24 +307,14 @@ func TestRetriesAfterConflictsAndPartialWrites(t *testing.T) {
 	r.client = faulty
 	_, err := r.Reconcile(t.Context(), poolRequest())
 	require.Error(t, err)
-	require.Nil(t, getPool(t, c).Status.Upgrade)
-	require.Equal(t, "4.22.14", getPool(t, c).Spec.Release.Version)
-	faulty.statusErr = nil
-	reconcilePool(t, r)
-	conflict := apierrors.NewConflict(schema.GroupResource{Resource: "nodepools"}, testPool, errors.New("conflict"))
-	faulty.patchErr = conflict
+	require.False(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+	require.False(t, privatev1.NodePoolReleaseApproved(getPool(t, c)))
+	faulty.statusErr = apierrors.NewConflict(schema.GroupResource{Resource: "nodepools"}, testPool, errors.New("conflict"))
 	require.Equal(t, retryInterval, reconcilePool(t, r).RequeueAfter)
-	require.Equal(t, "4.22.14", getPool(t, c).Spec.Release.Version)
-	faulty.patchErr = nil
-	reconcilePool(t, r)
-	require.Equal(t, "4.22.16", getPool(t, c).Spec.Release.Version)
-	faulty.statusErr = errors.New("temporary status failure")
-	_, err = r.Reconcile(t.Context(), poolRequest())
-	require.Error(t, err)
-	require.Nil(t, getPool(t, c).Status.Upgrade.StartedTime)
+	require.False(t, privatev1.NodePoolReleaseApproved(getPool(t, c)))
 	faulty.statusErr = nil
 	reconcilePool(t, r)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.StartedTime)
+	require.True(t, privatev1.NodePoolReleaseApproved(getPool(t, c)))
 }
 
 func TestTransientReadFailureDoesNotRejectUpgrade(t *testing.T) {
@@ -382,9 +324,9 @@ func TestTransientReadFailureDoesNotRejectUpgrade(t *testing.T) {
 	r.client = faulty
 	_, err := r.Reconcile(t.Context(), poolRequest())
 	require.Error(t, err)
-	require.Equal(t, "4.22.14", getPool(t, c).Spec.Release.Version)
-	require.Nil(t, getPool(t, c).Status.Upgrade)
+	require.False(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+	require.False(t, privatev1.NodePoolReleaseApproved(getPool(t, c)))
 	faulty.getErr = nil
 	reconcilePool(t, r)
-	require.NotNil(t, getPool(t, c).Status.Upgrade.AcceptedTime)
+	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
 }

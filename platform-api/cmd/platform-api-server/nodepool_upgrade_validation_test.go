@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/utils/ptr"
 )
 
 func validationFixtures(t *testing.T) (*nodePoolUpgradeValidator, *privatev1.NodePool) {
@@ -37,7 +36,7 @@ func validationFixtures(t *testing.T) (*nodePoolUpgradeValidator, *privatev1.Nod
 	pool := &privatev1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: "customer"},
 		Spec:       privatev1.NodePoolSpec{ClusterID: "example", Release: privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"}},
-		Status:     privatev1.NodePoolStatus{CurrentVersion: "4.22.14"},
+		Status:     privatev1.NodePoolStatus{Version: "4.22.14"},
 	}
 	return validator, pool
 }
@@ -51,11 +50,13 @@ func TestNodePoolUpgradeValidator(t *testing.T) {
 		{name: "valid target"},
 		{name: "missing Cluster", change: func(p *privatev1.NodePool) { p.Spec.ClusterID = "missing" }, want: "Cluster does not exist"},
 		{name: "outside channel", change: func(p *privatev1.NodePool) { p.Spec.Release.ChannelGroup = "fast" }, want: "channel group"},
-		{name: "unknown observed version", change: func(p *privatev1.NodePool) { p.Status.CurrentVersion = "" }, want: "must be observed"},
-		{name: "active release change", change: func(p *privatev1.NodePool) { p.Spec.Release.Version = "4.22.15" }, want: "in progress"},
-		{name: "target not newer", change: func(p *privatev1.NodePool) { p.Status.CurrentVersion = "4.22.16"; p.Spec.Release.Version = "4.22.16" }, want: "newer than"},
-		{name: "invalid observed version", change: func(p *privatev1.NodePool) { p.Status.CurrentVersion = "bad"; p.Spec.Release.Version = "bad" }, want: "observed NodePool version is invalid"},
-		{name: "unsupported minor step", change: func(p *privatev1.NodePool) { p.Status.CurrentVersion = "4.20.14"; p.Spec.Release.Version = "4.20.14" }, want: "next-minor"},
+		{name: "unknown observed version", change: func(p *privatev1.NodePool) { p.Status.Version = "" }, want: "must be observed"},
+		{name: "active release change", change: func(p *privatev1.NodePool) {
+			p.Status.Conditions = []metav1.Condition{{Type: "NodePoolProgressing", Status: metav1.ConditionTrue}}
+		}, want: "in progress"},
+		{name: "target not newer", change: func(p *privatev1.NodePool) { p.Status.Version = "4.22.16"; p.Spec.Release.Version = "4.22.16" }, want: "newer than"},
+		{name: "invalid observed version", change: func(p *privatev1.NodePool) { p.Status.Version = "bad"; p.Spec.Release.Version = "bad" }, want: "observed NodePool version is invalid"},
+		{name: "unsupported minor step", change: func(p *privatev1.NodePool) { p.Status.Version = "4.20.14"; p.Spec.Release.Version = "4.20.14" }, want: "next-minor"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -77,7 +78,7 @@ func TestNodePoolUpgradeValidator(t *testing.T) {
 	}
 }
 
-func TestNodePoolUpgradeDatabaseRepresentationAndPinnedDefault(t *testing.T) {
+func TestNodePoolUpgradeDatabaseRepresentation(t *testing.T) {
 	validator, pool := validationFixtures(t)
 	// Database Get returns Unstructured even when memory-backed fixtures are typed.
 	for _, item := range []struct {
@@ -101,22 +102,7 @@ func TestNodePoolUpgradeDatabaseRepresentationAndPinnedDefault(t *testing.T) {
 	if err := validator.Validate(t.Context(), pool, "4.22.16"); err != nil {
 		t.Fatal(err)
 	}
-	pool.Spec.Upgrade = &privatev1.NodePoolUpgradeSpec{}
-	if err := validator.Default(t.Context(), pool); err != nil {
-		t.Fatal(err)
-	}
-	if ptr.Deref(pool.Spec.Upgrade.TargetVersion, "") != "4.22.17" {
-		t.Fatal("target was not defaulted from the control plane")
-	}
-	// An explicit or previously pinned target must not be refreshed on later updates.
-	pool.Spec.Upgrade.TargetVersion = ptr.To("4.22.16")
-	pool.Spec.ClusterID = "missing"
-	if err := validator.Default(t.Context(), pool); err != nil {
-		t.Fatal(err)
-	}
-	if *pool.Spec.Upgrade.TargetVersion != "4.22.16" {
-		t.Fatal("target changed after submission")
-	}
+
 }
 
 func TestNodePoolUpgradeTargetVersionBounds(t *testing.T) {
@@ -131,7 +117,7 @@ func TestNodePoolUpgradeTargetVersionBounds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, pool := validationFixtures(t)
-			pool.Spec.Release.Version, pool.Status.CurrentVersion = tt.current, tt.current
+			pool.Spec.Release.Version, pool.Status.Version = tt.current, tt.current
 			pool.Spec.Release.ChannelGroup = tt.channel
 			cluster := &privatev1.Cluster{Status: privatev1.ClusterStatus{HostedClusterResult: &privatev1.HostedClusterResult{Version: tt.controlPlane}}}
 			release := &privatev1.Version{Spec: privatev1.VersionSpec{ChannelGroups: []string{tt.channel}}}

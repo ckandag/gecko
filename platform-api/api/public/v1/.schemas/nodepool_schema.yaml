@@ -163,6 +163,10 @@ properties:
             minLength: 1
             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
             type: string
+          upgradeStartTime:
+            format: date-time
+            nullable: true
+            type: string
           version:
             maxLength: 63
             minLength: 1
@@ -214,18 +218,6 @@ properties:
         - key
         - effect
         x-kubernetes-list-type: map
-      upgrade:
-        description: NodePoolUpgradeSpec requests one customer-initiated upgrade.
-        nullable: true
-        properties:
-          startTime:
-            format: date-time
-            type: string
-          targetVersion:
-            maxLength: 63
-            minLength: 1
-            type: string
-        type: object
     required:
     - clusterID
     - platform
@@ -296,36 +288,8 @@ properties:
         x-kubernetes-list-map-keys:
         - type
         x-kubernetes-list-type: map
-      currentVersion:
+      version:
         type: string
-      upgrade:
-        description: NodePoolUpgradeResult records the current or most recent upgrade.
-        properties:
-          acceptedTime:
-            format: date-time
-            type: string
-          completedTime:
-            format: date-time
-            type: string
-          failureMessage:
-            maxLength: 1024
-            type: string
-          failureReason:
-            maxLength: 63
-            type: string
-          requestedTime:
-            format: date-time
-            type: string
-          startedTime:
-            format: date-time
-            type: string
-          targetVersion:
-            maxLength: 63
-            minLength: 1
-            type: string
-        required:
-        - targetVersion
-        type: object
     type: object
 required:
 - spec

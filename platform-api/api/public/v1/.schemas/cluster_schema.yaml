@@ -378,6 +378,10 @@ properties:
             minLength: 1
             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
             type: string
+          upgradeStartTime:
+            format: date-time
+            nullable: true
+            type: string
           version:
             maxLength: 63
             minLength: 1

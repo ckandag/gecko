@@ -424,7 +424,15 @@ type ClusterReleaseSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ChannelGroup string `json:"channelGroup"`
-}
+
+	// upgradeStartTime is the earliest time a NodePool version upgrade may start.
+	// Omit it for an immediate upgrade. Scheduling initial installation or a
+	// Cluster release through this field is not supported.
+
+	// +optional
+	// +nullable
+	UpgradeStartTime *metav1.Time `json:"upgradeStartTime,omitempty"`
+} //nolint:kubeapilinter // Explicit null removes a pending schedule; omission preserves it on public PUT.
 
 type NetworkingSpec struct {
 	// machineNetwork is the list of IP address pools for machines.

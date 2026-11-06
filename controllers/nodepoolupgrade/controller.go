@@ -3,10 +3,8 @@ package nodepoolupgrade
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -17,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
-	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -50,143 +47,73 @@ func (r *Reconciler) Reconcile(ctx context.Context, key reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 	before := pool.DeepCopy()
-	if privatev1.NodePoolUpgradeActive(pool.Status.Upgrade) {
-		return r.reconcileAccepted(ctx, before, &pool)
+	if pool.Status.Version == "" {
+		return reconcile.Result{}, nil // Initial installation is unchanged.
 	}
-	if pool.Status.CurrentVersion != "" && pool.Spec.Release.Version != pool.Status.CurrentVersion {
-		return r.reconcileDirect(ctx, before, &pool)
+	if privatev1.NodePoolUpgradeActive(&pool) {
+		return r.observe(ctx, before, &pool)
 	}
-	if pool.Spec.Upgrade == nil {
-		return r.cancelPending(ctx, before, &pool)
-	}
-	if pool.Spec.Upgrade.TargetVersion == nil {
-		return r.defaultTarget(ctx, &pool)
-	}
-	id := intentID(pool.Spec.Upgrade)
-	if pool.Status.Upgrade == nil || ptr.Deref(pool.Status.Upgrade.IntentID, "") != id {
-		pool.Status.Upgrade = r.newResult(*pool.Spec.Upgrade.TargetVersion, id)
-	}
-	if terminal(pool.Status.Upgrade) {
+	if pool.Spec.Release.Version == pool.Status.Version {
+		progressing := meta.FindStatusCondition(pool.Status.Conditions, conditionProgressing)
+		if progressing != nil && progressing.Reason == "UpgradeCompleted" {
+			return reconcile.Result{}, nil
+		}
+		if progressing != nil || meta.FindStatusCondition(pool.Status.Conditions, conditionScheduled) != nil {
+			conditions(&pool, metav1.ConditionFalse, metav1.ConditionFalse, "UpgradeCanceled", "No version upgrade is requested")
+			setCondition(&pool, privatev1.NodePoolUpgradeSubmitted, metav1.ConditionFalse, "NotSubmitted", "No upgrade is pending submission")
+			return r.persist(ctx, before, &pool, 0)
+		}
 		return reconcile.Result{}, nil
 	}
-	if start := pool.Spec.Upgrade.StartTime; start != nil && r.now().Before(start.Time) {
+	// A rejected configuration remains visible until the desired configuration
+	// changes. Conditions describe the current spec, not a history of attempts.
+	if degraded := meta.FindStatusCondition(pool.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == pool.Generation {
+		return reconcile.Result{}, nil
+	}
+	setCondition(&pool, privatev1.NodePoolUpgradeSubmitted, metav1.ConditionFalse, "NotSubmitted", "The desired upgrade has not been dispatched")
+	if start := pool.Spec.Release.UpgradeStartTime; start != nil && r.now().Before(start.Time) {
 		remaining := start.Sub(r.now())
 		if remaining > maxScheduleWait {
 			remaining = maxScheduleWait
 		}
-		conditions(&pool, metav1.ConditionTrue, metav1.ConditionFalse, "WaitingForStartTime", "Waiting for the requested start time")
+		conditions(&pool, metav1.ConditionTrue, metav1.ConditionFalse, "WaitingForStartTime", "Waiting for spec.release.upgradeStartTime")
 		return r.persist(ctx, before, &pool, remaining)
 	}
-	return r.accept(ctx, before, &pool)
-}
-
-// intentID tracks the upgrade settings, rather than the whole object generation:
-// scaling, status updates, and our own release patch must not create new attempts.
-func intentID(upgrade *privatev1.NodePoolUpgradeSpec) string {
-	if upgrade == nil {
-		return ""
+	if !rolloutComplete(&pool) {
+		conditions(&pool, metav1.ConditionFalse, metav1.ConditionFalse, "WaitingForNodePool", "Waiting for fresh, healthy NodePool feedback")
+		return r.persist(ctx, before, &pool, waitInterval)
 	}
-	start := ""
-	if upgrade.StartTime != nil {
-		start = upgrade.StartTime.UTC().Format(time.RFC3339Nano)
+	if err := r.validate(ctx, &pool, pool.Spec.Release.Version); err != nil {
+		return r.validationResult(ctx, before, &pool, err)
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(ptr.Deref(upgrade.TargetVersion, "")+"\n"+start)))
-}
-
-func (r *Reconciler) newResult(target, id string) *privatev1.NodePoolUpgradeResult {
-	now := metav1.NewTime(r.now().UTC())
-	return &privatev1.NodePoolUpgradeResult{TargetVersion: target, IntentID: ptr.To(id), RequestedTime: &now}
-}
-
-func (r *Reconciler) defaultTarget(ctx context.Context, pool *privatev1.NodePool) (reconcile.Result, error) {
-	// Admission normally pins the default. Also recover persisted objects written
-	// without that defaulter, before scheduling or starting their upgrade.
-	var cluster privatev1.Cluster
-	if err := r.client.Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.ClusterID}, &cluster); err != nil {
-		return reconcile.Result{}, fmt.Errorf("read Cluster to default upgrade target: %w", err)
-	}
-	if cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
-		return reconcile.Result{RequeueAfter: waitInterval}, nil
-	}
-	before := pool.DeepCopy()
-	pool.Spec.Upgrade.TargetVersion = ptr.To(cluster.Status.HostedClusterResult.Version)
-	return patchResult(r.client.Patch(ctx, pool, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})))
-}
-
-func (r *Reconciler) accept(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
-	if pool.Status.CurrentVersion == "" || !rolloutComplete(pool) {
-		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, "WaitingForNodePool", "Waiting for observed NodePool version and health")
-		return r.persist(ctx, before, pool, waitInterval)
-	}
-	if err := r.validate(ctx, pool, pool.Status.Upgrade.TargetVersion); err != nil {
-		return r.validationResult(ctx, before, pool, err)
-	}
-	now := metav1.NewTime(r.now().UTC())
-	pool.Status.Upgrade.AcceptedTime = &now
-	conditions(pool, metav1.ConditionFalse, metav1.ConditionTrue, "UpgradeAccepted", "Upgrade target accepted for execution")
-	// Persist acceptance before changing the installation target. Admission then
-	// prevents concurrent cancellation or replacement, including across restarts.
-	return r.persist(ctx, before, pool, retryInterval)
-}
-
-func (r *Reconciler) reconcileAccepted(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
-	result := pool.Status.Upgrade
-	if !strings.HasPrefix(ptr.Deref(result.IntentID, ""), "release:") && ptr.Deref(result.IntentID, "") != intentID(pool.Spec.Upgrade) {
-		return r.fail(ctx, before, pool, "UpgradeChanged", "The accepted upgrade settings changed")
-	}
-	if pool.Spec.Release.Version == result.TargetVersion {
-		return r.observe(ctx, before, pool)
-	}
-	if pool.Spec.Release.Version != pool.Status.CurrentVersion {
-		return r.fail(ctx, before, pool, "ConcurrentUpgrade", "Another release change is already in progress")
-	}
-	if !rolloutComplete(pool) {
-		conditions(pool, metav1.ConditionFalse, metav1.ConditionTrue, "WaitingForNodePool", "Waiting for the NodePool to become healthy")
-		return r.persist(ctx, before, pool, waitInterval)
-	}
-	// Revalidate after acceptance too: another actor may have completed a newer
-	// upgrade while this reconciler was stopped. Never overwrite that with an old target.
-	if err := r.validate(ctx, pool, result.TargetVersion); err != nil {
-		return r.validationResult(ctx, before, pool, err)
-	}
-	pool.Spec.Release.Version = result.TargetVersion
-	return patchResult(r.client.Patch(ctx, pool, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})))
-}
-
-func (r *Reconciler) reconcileDirect(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
-	id := "release:" + pool.Spec.Release.Version
-	if pool.Status.Upgrade == nil || ptr.Deref(pool.Status.Upgrade.IntentID, "") != id {
-		pool.Status.Upgrade = r.newResult(pool.Spec.Release.Version, id)
-		now := metav1.NewTime(r.now().UTC())
-		pool.Status.Upgrade.AcceptedTime = &now
-	}
-	if terminal(pool.Status.Upgrade) {
-		return reconcile.Result{}, nil
-	}
-	return r.observe(ctx, before, pool)
+	// Optimistic status persistence orders approval against concurrent spec
+	// updates. Once accepted, admission locks the release settings until a
+	// confirmed pre-submission failure or healthy completion.
+	conditions(&pool, metav1.ConditionFalse, metav1.ConditionTrue, "UpgradeAccepted", "The desired release is approved for rollout")
+	return r.persist(ctx, before, &pool, retryInterval)
 }
 
 func (r *Reconciler) observe(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
-	result := pool.Status.Upgrade
-	if result.StartedTime == nil {
-		now := metav1.NewTime(r.now().UTC())
-		result.StartedTime = &now
-	}
-	if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolVersionResolved"); c != nil && c.ObservedGeneration == pool.Generation && c.Status == metav1.ConditionFalse {
-		return r.fail(ctx, before, pool, "VersionResolutionFailed", "The target release could not be resolved")
-	}
-	if pool.Status.CurrentVersion == result.TargetVersion && rolloutComplete(pool) {
-		now := metav1.NewTime(r.now().UTC())
-		result.CompletedTime = &now
-		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, "UpgradeCompleted", "The NodePool reached the target version and is healthy")
-		return r.persist(ctx, before, pool, 0)
-	}
-	if current, err := utilversion.ParseSemantic(pool.Status.CurrentVersion); err == nil {
-		if target, err := utilversion.ParseSemantic(result.TargetVersion); err == nil && target.LessThan(current) {
-			return r.fail(ctx, before, pool, "TargetSuperseded", "The observed NodePool version is newer than this upgrade target")
+	if !privatev1.NodePoolUpgradeSubmissionStarted(pool) {
+		if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolVersionResolved"); c != nil && c.ObservedGeneration == pool.Generation && c.Status == metav1.ConditionFalse {
+			return r.fail(ctx, before, pool, "VersionResolutionFailed", "The desired release could not be resolved before submission")
+		}
+		if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolResourcesApplied"); c != nil && c.ObservedGeneration == pool.Generation && c.Status == metav1.ConditionFalse && c.Reason == "ManifestBuildFailed" {
+			return r.fail(ctx, before, pool, "PreparationFailed", "The desired release could not be prepared for submission")
 		}
 	}
-	conditions(pool, metav1.ConditionFalse, metav1.ConditionTrue, "WaitingForNodePool", "Waiting for the target version and a healthy rollout")
+	if pool.Status.Version == pool.Spec.Release.Version && rolloutComplete(pool) {
+		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, "UpgradeCompleted", "The NodePool reached the desired version and is healthy")
+		return r.persist(ctx, before, pool, 0)
+	}
+	if current, err := utilversion.ParseSemantic(pool.Status.Version); err == nil {
+		if target, err := utilversion.ParseSemantic(pool.Spec.Release.Version); err == nil && target.LessThan(current) {
+			if !privatev1.NodePoolUpgradeSubmissionStarted(pool) {
+				return r.fail(ctx, before, pool, "TargetSuperseded", "The observed NodePool version is newer than the desired version")
+			}
+		}
+	}
+	conditions(pool, metav1.ConditionFalse, metav1.ConditionTrue, "WaitingForNodePool", "Waiting for the desired version and a healthy rollout")
 	return r.persist(ctx, before, pool, waitInterval)
 }
 
@@ -239,21 +166,8 @@ func (r *Reconciler) validationResult(ctx context.Context, before, pool *private
 }
 
 func (r *Reconciler) fail(ctx context.Context, before, pool *privatev1.NodePool, reason, message string) (reconcile.Result, error) {
-	pool.Status.Upgrade.FailureReason = ptr.To(reason)
-	pool.Status.Upgrade.FailureMessage = ptr.To(message)
 	conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, reason, message)
 	setCondition(pool, conditionDegraded, metav1.ConditionTrue, reason, message)
-	return r.persist(ctx, before, pool, 0)
-}
-
-func (r *Reconciler) cancelPending(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
-	if pool.Status.Upgrade == nil || pool.Status.Upgrade.IntentID == nil {
-		return reconcile.Result{}, nil
-	}
-	pool.Status.Upgrade.IntentID = nil
-	if !terminal(pool.Status.Upgrade) {
-		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, "UpgradeCanceled", "The pending upgrade was canceled")
-	}
 	return r.persist(ctx, before, pool, 0)
 }
 
@@ -269,10 +183,6 @@ func setCondition(pool *privatev1.NodePool, typ string, status metav1.ConditionS
 	})
 }
 
-func terminal(result *privatev1.NodePoolUpgradeResult) bool {
-	return result.CompletedTime != nil || result.FailureReason != nil
-}
-
 func (r *Reconciler) persist(ctx context.Context, before, pool *privatev1.NodePool, after time.Duration) (reconcile.Result, error) {
 	if !apiequality.Semantic.DeepEqual(before.Status, pool.Status) {
 		if err := r.client.Status().Patch(ctx, pool, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
@@ -283,11 +193,4 @@ func (r *Reconciler) persist(ctx context.Context, before, pool *privatev1.NodePo
 		}
 	}
 	return reconcile.Result{RequeueAfter: after}, nil
-}
-
-func patchResult(err error) (reconcile.Result, error) {
-	if err != nil && !apierrors.IsConflict(err) {
-		return reconcile.Result{}, fmt.Errorf("patch NodePool upgrade target: %w", err)
-	}
-	return reconcile.Result{RequeueAfter: retryInterval}, nil
 }

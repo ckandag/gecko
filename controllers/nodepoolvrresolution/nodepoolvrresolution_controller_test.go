@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -518,4 +520,41 @@ func TestSetCondition(t *testing.T) {
 		require.Len(t, conds, 1)
 		require.False(t, conds[0].LastTransitionTime.IsZero())
 	})
+}
+
+func TestUpgradeResolutionRequiresMatchingApproval(t *testing.T) {
+	np := makeNP("example", "workers", "4.22.16")
+	np.Namespace = "customer"
+	np.Spec.Release.ChannelGroup = "stable"
+	np.Spec.Release.UpgradeStartTime = ptr.To(metav1.NewTime(time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)))
+	np.Status.Version = "4.22.14"
+	np.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.22.14", ReleaseImage: "old-image", ChannelGroup: "stable"}
+	cluster := makeCluster("example")
+	cluster.Namespace = np.Namespace
+	release := catalogVersion("4.22.16", "target-image", "stable")
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(np).WithObjects(np, cluster, release).Build()
+	r := NewReconciler(newTestLogger(t), apiClient)
+	req := npReq(np.Namespace, np.Name)
+	_, err := r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(np), np))
+	require.Equal(t, "old-image", np.Status.VersionResolution.ReleaseImage, "a scheduled target must not reach installation")
+	now := metav1.Now()
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: privatev1.NodePoolUpgradeProgressing, Status: metav1.ConditionTrue, Reason: "UpgradeAccepted", ObservedGeneration: np.Generation, LastTransitionTime: now})
+	require.NoError(t, apiClient.Status().Update(t.Context(), np))
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(np), np))
+	require.Equal(t, "target-image", np.Status.VersionResolution.ReleaseImage)
+	// Fresh requests cannot reuse a completed rollout's approval.
+	np.Status.Version = "4.22.16"
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: privatev1.NodePoolUpgradeProgressing, Status: metav1.ConditionFalse, Reason: "UpgradeCompleted"})
+	require.NoError(t, apiClient.Status().Update(t.Context(), np))
+	np.Spec.Release.Version = "4.22.17"
+	np.Generation++
+	require.NoError(t, apiClient.Update(t.Context(), np))
+	_, err = r.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(np), np))
+	require.Equal(t, "4.22.16", np.Status.VersionResolution.ReleaseVersion)
 }

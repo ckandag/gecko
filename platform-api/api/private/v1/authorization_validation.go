@@ -85,7 +85,6 @@ func NormalizeEmail(email string) (string, error) {
 type ValidatorDeps struct {
 	RoleExists              func(context.Context, string, string) (bool, error)
 	PlatformRoleExists      func(context.Context, string) (bool, error)
-	DefaultNodePoolUpgrade  func(context.Context, *NodePool) error
 	ValidateNodePoolUpgrade func(context.Context, *NodePool, string) error
 }
 

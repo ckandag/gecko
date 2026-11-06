@@ -83,6 +83,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	// Catalog rejection is terminal for this spec, including across restarts
 	// and unrelated status or Channel events. A new generation permits retry.
+	// Keep the last applied release until the upgrade coordinator has approved
+	// exactly this desired version, channel, and schedule. Initial installs pass.
+	if !privatev1.NodePoolReleaseApproved(&np) {
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	if catalog.ResolutionRejected(meta.FindStatusCondition(np.Status.Conditions, "NodePoolVersionResolved"), np.Generation) {
 		return reconcile.Result{}, nil
 	}

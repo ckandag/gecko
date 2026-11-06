@@ -11,7 +11,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 )
 
 //nolint:kubeapilinter // Runtime storage dependencies are not serialized API fields.
@@ -61,21 +60,6 @@ func (v *nodePoolUpgradeValidator) cluster(ctx context.Context, pool *privatev1.
 		return nil, fmt.Errorf("the stored Cluster has an unexpected type")
 	}
 	return cluster, nil
-}
-
-func (v *nodePoolUpgradeValidator) Default(ctx context.Context, pool *privatev1.NodePool) error {
-	if pool.Spec.Upgrade == nil || pool.Spec.Upgrade.TargetVersion != nil {
-		return nil
-	}
-	cluster, err := v.cluster(ctx, pool)
-	if err != nil {
-		return err
-	}
-	if cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
-		return fmt.Errorf("the control-plane version must be observed before defaulting the upgrade target")
-	}
-	pool.Spec.Upgrade.TargetVersion = ptr.To(cluster.Status.HostedClusterResult.Version)
-	return nil
 }
 
 func (v *nodePoolUpgradeValidator) Validate(ctx context.Context, pool *privatev1.NodePool, target string) error {

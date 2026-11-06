@@ -2,7 +2,6 @@ package v1_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,18 +38,11 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 			ClusterID: "example", Release: privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"},
 			Platform: privatev1.NodePoolPlatformSpec{Type: "GCP", GCP: &privatev1.GCPNodePoolPlatform{MachineType: "n2-standard-4", Zone: "us-central1-a", Subnet: "workers"}},
 		},
-		Status: privatev1.NodePoolStatus{CurrentVersion: "4.22.14", VersionResolution: &privatev1.VersionResolutionResult{ReleaseImage: "private-image", ReleaseVersion: "4.22.14"}},
+		Status: privatev1.NodePoolStatus{Version: "4.22.14", VersionResolution: &privatev1.VersionResolutionResult{ReleaseImage: "private-image", ReleaseVersion: "4.22.14"}},
 	}
 	if err := store.Create(t.Context(), pool); err != nil {
 		t.Fatal(err)
 	}
-	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
-		DefaultNodePoolUpgrade: func(_ context.Context, p *privatev1.NodePool) error {
-			p.Spec.Upgrade.TargetVersion = ptr.To("4.22.16")
-			return nil
-		},
-	})
-	t.Cleanup(func() { privatev1.SetValidatorDeps(privatev1.ValidatorDeps{}) })
 	converter := conversion.NewConverter(publicScheme, privateScheme, "")
 	handler := handlers.NewConvertingResourceHandler(store, maintenanceClusterSchemaProcessor(t, publicv1.NodePoolSchemaYAML), converter, gvk, "nodepools", publicScheme, privateScheme, nil, logr.Discard())
 	router := chi.NewRouter()
@@ -88,35 +80,32 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 			t.Fatalf("HTTP %d: %s", response.Code, response.Body.String())
 		}
 	}
-	// The empty upgrade object chooses the default exactly once. Customer status input is stripped.
+	// The desired version changes immediately; observed and private state do not.
 	assertOK(request(http.MethodPatch, map[string]any{
-		"spec":   map[string]any{"upgrade": map[string]any{}},
-		"status": map[string]any{"currentVersion": "99.0.0"},
+		"spec":   map[string]any{"release": map[string]any{"version": "4.22.16", "upgradeStartTime": "2026-11-07T12:00:00Z"}},
+		"status": map[string]any{"version": "99.0.0"},
 	}))
 	updated := read()
-	if updated.Spec.Upgrade == nil || ptr.Deref(updated.Spec.Upgrade.TargetVersion, "") != "4.22.16" {
-		t.Fatal("upgrade target was not defaulted")
+	if updated.Spec.Release.Version != "4.22.16" || updated.Status.Version != "4.22.14" || updated.Spec.Release.UpgradeStartTime == nil {
+		t.Fatal("desired and observed versions or schedule were not preserved")
 	}
-	if updated.Spec.Release.Version != "4.22.14" || updated.Status.CurrentVersion != "4.22.14" {
-		t.Fatal("request prematurely changed release or observed version")
-	}
-	// An ordinary public PUT omitting upgrade must preserve the pending intent and private status.
+	// Ordinary PUT omission preserves the pending schedule and private status.
 	publicObj, err := converter.PrivateToPublic(updated)
 	if err != nil {
 		t.Fatal(err)
 	}
 	publicPool := publicObj.(*publicv1.NodePool)
-	publicPool.Spec.Upgrade = nil
+	publicPool.Spec.Release.UpgradeStartTime = nil
 	publicPool.Spec.NodeCount = ptr.To(int32(3))
 	assertOK(request(http.MethodPut, publicPool))
 	updated = read()
-	if updated.Spec.Upgrade == nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
-		t.Fatal("unrelated update lost pending intent or private status")
+	if updated.Spec.Release.UpgradeStartTime == nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
+		t.Fatal("unrelated update lost schedule or private status")
 	}
-	// Both explicit PUT null and merge-patch removal must cancel pending upgrades.
+	// Explicit null removes the schedule, making the desired upgrade immediate.
 	for _, method := range []string{http.MethodPut, http.MethodPatch} {
-		t.Run(method+" cancellation", func(t *testing.T) {
-			assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"upgrade": map[string]any{"targetVersion": "4.22.16"}}}))
+		t.Run(method+" clear schedule", func(t *testing.T) {
+			assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": "2026-11-07T12:00:00Z"}}}))
 			var body map[string]any
 			if method == http.MethodPut {
 				get := request(http.MethodGet, nil)
@@ -124,31 +113,48 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 				if err := json.Unmarshal(get.Body.Bytes(), &body); err != nil {
 					t.Fatal(err)
 				}
-				body["spec"].(map[string]any)["upgrade"] = nil
+				body["spec"].(map[string]any)["release"].(map[string]any)["upgradeStartTime"] = nil
 			} else {
-				body = map[string]any{"spec": map[string]any{"upgrade": nil}}
+				body = map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": nil}}}
 			}
 			assertOK(request(method, body))
-			if read().Spec.Upgrade != nil {
-				t.Fatal("pending upgrade was not canceled")
+			if read().Spec.Release.UpgradeStartTime != nil {
+				t.Fatal("schedule was not removed")
 			}
 		})
 	}
-	// Admission uses stored acceptance; a customer cannot clear status to bypass the lock.
-	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"upgrade": map[string]any{"targetVersion": "4.22.16"}}}))
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"version": "4.22.14", "upgradeStartTime": nil}}}))
+	if read().Spec.Release.Version != "4.22.14" {
+		t.Fatal("pending request was not canceled")
+	}
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"version": "4.22.16"}}}))
 	updated = read()
 	now := metav1.Now()
-	updated.Status.Upgrade = &privatev1.NodePoolUpgradeResult{TargetVersion: "4.22.16", AcceptedTime: &now, IntentID: ptr.To("private-intent")}
+	updated.Status.Conditions = []metav1.Condition{{Type: "NodePoolUpgradeProgressing", Status: metav1.ConditionTrue, Reason: "UpgradeAccepted", LastTransitionTime: now, ObservedGeneration: updated.Generation}}
 	if err := store.Update(t.Context(), updated); err != nil {
 		t.Fatal(err)
 	}
-	response := request(http.MethodPatch, map[string]any{"spec": map[string]any{"upgrade": nil}, "status": map[string]any{"upgrade": nil}})
+	// Customer status input cannot bypass the persisted acceptance lock.
+	response := request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"version": "4.22.14"}}, "status": map[string]any{"conditions": []any{}}})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("accepted cancellation returned %d: %s", response.Code, response.Body.String())
 	}
 	response = request(http.MethodGet, nil)
 	assertOK(response)
-	if bytes.Contains(response.Body.Bytes(), []byte("intentID")) || bytes.Contains(response.Body.Bytes(), []byte("private-image")) {
+	var publicResponse publicv1.NodePool
+	if err := json.Unmarshal(response.Body.Bytes(), &publicResponse); err != nil {
+		t.Fatal(err)
+	}
+	if publicResponse.Status.Version != "4.22.14" || publicResponse.Spec.Release.Version != "4.22.16" {
+		t.Fatal("public API did not distinguish the observed version from the desired version")
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("\"currentVersion\"")) {
+		t.Fatal("public API exposed the old status field name")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("NodePoolUpgradeProgressing")) {
+		t.Fatal("public response did not expose upgrade conditions")
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("intentID")) || bytes.Contains(response.Body.Bytes(), []byte("private-image")) || bytes.Contains(response.Body.Bytes(), []byte("\"upgrade\"")) {
 		t.Fatal("public response exposed private controller state")
 	}
 }

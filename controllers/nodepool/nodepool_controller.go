@@ -115,17 +115,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	// Gate: VR version must match spec version.
-	if np.Status.VersionResolution.ReleaseVersion != np.Spec.Release.Version {
+	// While a desired upgrade waits for approval, continue reconciling the
+	// observed release so scaling and fresh health feedback are not blocked.
+	version := installationVersion(&np)
+	// Gate: VR must match the release currently permitted for installation.
+	if np.Status.VersionResolution.ReleaseVersion != version {
 		msg := fmt.Sprintf("VR version %q does not match spec version %q",
-			np.Status.VersionResolution.ReleaseVersion, np.Spec.Release.Version)
+			np.Status.VersionResolution.ReleaseVersion, version)
 		if setWaitingNPConditions(&np, "VersionMismatch", msg) {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
 			}
 		}
 		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
-			np.Status.VersionResolution.ReleaseVersion, np.Spec.Release.Version, requeuePending)
+			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
@@ -184,7 +187,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ReleaseImage:       np.Status.VersionResolution.ReleaseImage,
 	})
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: build manifests: %w", err)
+		return reconcile.Result{}, r.preparationFailure(ctx, &np, err)
 	}
 
 	groupKey, err := transport.NodePoolGroupKey(req.Namespace, np.Spec.ClusterID, req.Name)
@@ -194,7 +197,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+	mwStatus, err := r.applyResources(ctx, &np, managementCluster, groupKey, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
@@ -302,6 +305,72 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 	return reconcile.Result{}, nil
 }
 
+// preparationFailure reports a confirmed failure before dispatch. The upgrade
+// coordinator can then release its lock without implying a HyperShift rollback.
+func (r *Reconciler) preparationFailure(ctx context.Context, np *privatev1.NodePool, cause error) error {
+	if privatev1.NodePoolUpgradeActive(np) && !privatev1.NodePoolUpgradeSubmissionStarted(np) {
+		before := np.DeepCopy()
+		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+			Type: "NodePoolResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed",
+			Message: "The desired NodePool resources could not be prepared before dispatch", ObservedGeneration: np.Generation,
+		})
+		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("record NodePool preparation failure: %w", err)
+		}
+	}
+	return fmt.Errorf("nodepool reconciler: build manifests: %w", cause)
+}
+
+// applyResources persists the dispatch boundary before transport can write the
+// target. An unknown result remains locked across errors or restarts; recovery
+// after dispatch is intentionally outside the pre-submission cancellation flow.
+func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
+	upgrading := privatev1.NodePoolUpgradeActive(np) && np.Spec.Release.Version != np.Status.Version
+	if !upgrading {
+		return r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+	}
+	submitted := meta.FindStatusCondition(np.Status.Conditions, privatev1.NodePoolUpgradeSubmitted)
+	if submitted == nil || submitted.Status == metav1.ConditionFalse {
+		before := np.DeepCopy()
+		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
+			Reason: "Dispatching", Message: "The desired release is being dispatched to the management cluster",
+			ObservedGeneration: np.Generation,
+		})
+		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
+			return nil, fmt.Errorf("persist upgrade dispatch boundary: %w", err)
+		}
+		return &transport.Status{Stale: true}, nil
+	}
+	status, err := r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+	if err != nil {
+		return nil, err
+	}
+	if submitted.Status != metav1.ConditionTrue {
+		before := np.DeepCopy()
+		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionTrue,
+			Reason: "Dispatched", Message: "The desired release was dispatched to the management cluster",
+			ObservedGeneration: np.Generation,
+		})
+		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			if apierrors.IsConflict(err) {
+				return &transport.Status{Stale: true}, nil
+			}
+			return nil, fmt.Errorf("persist upgrade dispatch acknowledgement: %w", err)
+		}
+	}
+	return status, nil
+}
+
+// installationVersion keeps unapproved release intent out of applied manifests.
+func installationVersion(np *privatev1.NodePool) string {
+	if !privatev1.NodePoolReleaseApproved(np) {
+		return np.Status.Version
+	}
+	return np.Spec.Release.Version
+}
+
 // setWaitingNPConditions sets NodePoolResourcesApplied and NodePoolAvailable to Unknown.
 // Returns true if either condition changed.
 func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool {
@@ -374,8 +443,8 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 	// rs is nil if npKey not in map; nil-safe below.
 	rs := mwStatus.ResourceStatuses[npKey]
 	versionChanged := false
-	if rs != nil && rs["version"] != "" && np.Status.CurrentVersion != rs["version"] {
-		np.Status.CurrentVersion = rs["version"]
+	if rs != nil && rs["version"] != "" && np.Status.Version != rs["version"] {
+		np.Status.Version = rs["version"]
 		versionChanged = true
 	}
 	availableStatus := "False"

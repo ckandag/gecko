@@ -626,6 +626,14 @@ properties:
             minLength: 1
             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
             type: string
+          upgradeStartTime:
+            description: |-
+              upgradeStartTime is the earliest time a NodePool version upgrade may start.
+              Omit it for an immediate upgrade. Scheduling initial installation or a
+              Cluster release through this field is not supported.
+            format: date-time
+            nullable: true
+            type: string
           version:
             description: |-
               version is the desired OpenShift release. A major.minor value (for example,

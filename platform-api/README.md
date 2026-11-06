@@ -126,9 +126,10 @@ can still be returned; `gcphcpctl platformrole` minimizes metadata in its output
 
 ## NodePool upgrades
 
-Request immediate or one-time scheduled upgrades through `NodePool.spec.upgrade`.
-The upgrade coordinator submits eligible targets through the existing
-`spec.release.version` installation flow. `status.currentVersion` reports the
-observed version, and `status.upgrade` plus upgrade conditions report progress.
+Request immediate or one-time scheduled upgrades through `NodePool.spec.release`:
+set `version` to the desired version and optionally set `upgradeStartTime`. The upgrade
+coordinator approves eligible releases before version resolution and installation.
+`status.version` reports the
+observed version, and `status.conditions` reports upgrade progress and failures.
 See [NodePool upgrade flow](../controllers/nodepoolupgrade/README.md) for
 request, watch, cancellation, and validation examples.

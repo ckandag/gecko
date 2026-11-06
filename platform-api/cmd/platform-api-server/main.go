@@ -203,7 +203,6 @@ func main() {
 	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
 		RoleExists:              stores.RoleExists,
 		PlatformRoleExists:      stores.PlatformRoleExists,
-		DefaultNodePoolUpgrade:  upgradeValidator.Default,
 		ValidateNodePoolUpgrade: upgradeValidator.Validate,
 	})
 

@@ -69,14 +69,6 @@ type NodePoolSpec struct {
 	// +required
 	Release NodePoolReleaseSpec `json:"release"`
 
-	// upgrade requests a one-time upgrade of this pool. Omit this field to keep
-	// the existing installation behavior. Set it to null to cancel a pending
-	// upgrade before it is accepted for execution.
-	// +orlop:public
-	// +optional
-	// +nullable
-	Upgrade *NodePoolUpgradeSpec `json:"upgrade,omitempty"` //nolint:kubeapilinter // Explicit null cancels a pending upgrade; omission preserves it on public PUT.
-
 	// nodeCount is the desired number of nodes the pool should maintain. If unset, the controller default value is 0.
 	// nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, nodeCount must be omitted and autoscaling will control the NodePool size internally.
 	//
@@ -338,17 +330,11 @@ type NodePoolStatus struct {
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// currentVersion is the last OpenShift version observed as applied to this
+	// version is the last OpenShift version observed as applied to this
 	// NodePool. It does not advance merely because an upgrade was requested.
 	// +orlop:public
 	// +optional
-	CurrentVersion string `json:"currentVersion,omitempty"`
-
-	// upgrade reports the current or most recent upgrade, including its target,
-	// execution times, and failure details.
-	// +orlop:public
-	// +optional
-	Upgrade *NodePoolUpgradeResult `json:"upgrade,omitempty"`
+	Version string `json:"version,omitempty"`
 
 	// VersionResolution is written by the nodepool-vr controller.
 	// Not exposed on the public API.
