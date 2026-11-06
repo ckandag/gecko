@@ -14,22 +14,18 @@ import (
 
 	"github.com/go-logr/logr"
 	openapi_v2 "github.com/google/gnostic-models/openapiv2"
-	"google.golang.org/protobuf/proto"
 
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apiserver/pkg/server/healthz"
 	openapiproto "k8s.io/kube-openapi/pkg/util/proto"
-
-	"sigs.k8s.io/yaml"
 )
 
 type integrationTestEnv struct {
@@ -685,81 +681,4 @@ func keysOf(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
-}
-
-// Nullable fields must remain usable through both Kubernetes discovery formats.
-func TestIntegration_OpenAPINullableField(t *testing.T) {
-	env := setupIntegrationTestWithConfig(t, func(cfg *Config) {
-		var schema apiextv1.JSONSchemaProps
-		if err := yaml.Unmarshal([]byte(cfg.Resources[0].SchemaYAML), &schema); err != nil {
-			t.Fatal(err)
-		}
-		spec := schema.Properties["spec"]
-		field := spec.Properties["publicField"]
-		field.Nullable = true
-		spec.Properties["publicField"] = field
-		schema.Properties["spec"] = spec
-		data, err := yaml.Marshal(schema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cfg.Resources[0].SchemaYAML = string(data)
-	})
-	t.Run("v2 protobuf", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodGet, env.url("/openapi/v2"), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Accept", "application/com.github.proto-openapi.spec.v2@v1.0+protobuf")
-		resp, err := env.client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("protobuf discovery returned %d: %s", resp.StatusCode, body)
-		}
-		var document openapi_v2.Document
-		if err := proto.Unmarshal(body, &document); err != nil {
-			t.Fatalf("decode protobuf discovery: %v", err)
-		}
-		models, err := openapiproto.NewOpenAPIData(&document)
-		if err != nil {
-			t.Fatal(err)
-		}
-		name := strings.ReplaceAll(goTypeName(&testv1.Object{}), "/", "~1")
-		if models.LookupModel(name) == nil {
-			t.Fatal("Object schema is missing")
-		}
-	})
-	t.Run("v3 preserves nullable", func(t *testing.T) {
-		resp, err := env.client.Get(env.url("/openapi/v3/apis/" + testv1.GroupVersion.String()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		var doc struct {
-			Components struct {
-				Schemas map[string]apiextv1.JSONSchemaProps `json:"schemas"`
-			} `json:"components"`
-		}
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("v3 discovery returned %d", resp.StatusCode)
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-			t.Fatal(err)
-		}
-		name := strings.ReplaceAll(goTypeName(&testv1.Object{}), "/", "~1")
-		schema, ok := doc.Components.Schemas[name]
-		if !ok {
-			t.Fatal("Object schema is missing")
-		}
-		if !schema.Properties["spec"].Properties["publicField"].Nullable {
-			t.Fatal("v3 lost nullable field")
-		}
-	})
 }

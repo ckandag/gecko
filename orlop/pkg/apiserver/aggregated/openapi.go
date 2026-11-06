@@ -8,10 +8,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 	generatedopenapi "github.com/openshift-online/gecko/orlop/pkg/generated/openapi"
 
-	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
-	openapiv2 "k8s.io/apiextensions-apiserver/pkg/controller/openapi/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
@@ -23,12 +20,12 @@ import (
 // buildOpenAPIDefinitions creates a GetOpenAPIDefinitions function that merges
 // generated apimachinery + API type definitions with definitions derived from
 // each resource's structural schema.
-func buildOpenAPIDefinitions(scheme *runtime.Scheme, resources []types.ResourceInfo, v2 bool) openapicommon.GetOpenAPIDefinitions {
+func buildOpenAPIDefinitions(scheme *runtime.Scheme, resources []types.ResourceInfo) openapicommon.GetOpenAPIDefinitions {
 	return func(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
 		defs := generatedopenapi.GetOpenAPIDefinitions(ref)
 
 		for _, res := range resources {
-			schema, err := schemaYAMLToOpenAPI(res.SchemaYAML, v2)
+			schema, err := schemaYAMLToOpenAPI(res.SchemaYAML)
 			if err != nil {
 				continue
 			}
@@ -81,26 +78,12 @@ func goTypeName(obj runtime.Object) string {
 	return fmt.Sprintf("%s.%s", t.PkgPath(), t.Name())
 }
 
-func schemaYAMLToOpenAPI(schemaYAML string, v2 bool) (*spec.Schema, error) {
+func schemaYAMLToOpenAPI(schemaYAML string) (*spec.Schema, error) {
 	var propsV1 apiextv1.JSONSchemaProps
 	if err := yaml.Unmarshal([]byte(schemaYAML), &propsV1); err != nil {
 		return nil, err
 	}
 
-	if v2 {
-		// Match Kubernetes CRD discovery: OpenAPI v2 cannot express nullable or
-		// the v3 composition keywords. Keep the original schema for v3 serving
-		// and server-side validation.
-		var props apiext.JSONSchemaProps
-		if err := apiextv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(&propsV1, &props, nil); err != nil {
-			return nil, err
-		}
-		structural, err := structuralschema.NewStructural(&props)
-		if err != nil {
-			return nil, err
-		}
-		return openapiv2.ToStructuralOpenAPIV2(structural).ToKubeOpenAPI(), nil
-	}
 	return jsonSchemaPropsToOpenAPI(&propsV1), nil
 }
 

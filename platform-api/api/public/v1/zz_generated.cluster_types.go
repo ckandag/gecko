@@ -428,11 +428,11 @@ type ClusterReleaseSpec struct {
 	// upgradeStartTime is the earliest time a NodePool version upgrade may start.
 	// Omit it for an immediate upgrade. Scheduling initial installation or a
 	// Cluster release through this field is not supported.
+	// Clear a pending schedule with a JSON merge PATCH setting this field to null.
 
 	// +optional
-	// +nullable
 	UpgradeStartTime *metav1.Time `json:"upgradeStartTime,omitempty"`
-} //nolint:kubeapilinter // Explicit null removes a pending schedule; omission preserves it on public PUT.
+}
 
 type NetworkingSpec struct {
 	// machineNetwork is the list of IP address pools for machines.

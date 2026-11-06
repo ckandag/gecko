@@ -252,8 +252,8 @@ properties:
               upgradeStartTime is the earliest time a NodePool version upgrade may start.
               Omit it for an immediate upgrade. Scheduling initial installation or a
               Cluster release through this field is not supported.
+              Clear a pending schedule with a JSON merge PATCH setting this field to null.
             format: date-time
-            nullable: true
             type: string
           version:
             description: |-

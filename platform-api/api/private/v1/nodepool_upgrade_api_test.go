@@ -102,26 +102,22 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 	if updated.Spec.Release.UpgradeStartTime == nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
 		t.Fatal("unrelated update lost schedule or private status")
 	}
-	// Explicit null removes the schedule, making the desired upgrade immediate.
-	for _, method := range []string{http.MethodPut, http.MethodPatch} {
-		t.Run(method+" clear schedule", func(t *testing.T) {
-			assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": "2026-11-07T12:00:00Z"}}}))
-			var body map[string]any
-			if method == http.MethodPut {
-				get := request(http.MethodGet, nil)
-				assertOK(get)
-				if err := json.Unmarshal(get.Body.Bytes(), &body); err != nil {
-					t.Fatal(err)
-				}
-				body["spec"].(map[string]any)["release"].(map[string]any)["upgradeStartTime"] = nil
-			} else {
-				body = map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": nil}}}
-			}
-			assertOK(request(method, body))
-			if read().Spec.Release.UpgradeStartTime != nil {
-				t.Fatal("schedule was not removed")
-			}
-		})
+	// Public PUT retains the existing optional-field preservation behavior.
+	// A merge PATCH explicitly removes the schedule, making the upgrade immediate.
+	get := request(http.MethodGet, nil)
+	assertOK(get)
+	var body map[string]any
+	if err := json.Unmarshal(get.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	body["spec"].(map[string]any)["release"].(map[string]any)["upgradeStartTime"] = nil
+	assertOK(request(http.MethodPut, body))
+	if read().Spec.Release.UpgradeStartTime == nil {
+		t.Fatal("PUT changed optional-field preservation behavior")
+	}
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": nil}}}))
+	if read().Spec.Release.UpgradeStartTime != nil {
+		t.Fatal("merge PATCH did not remove the schedule")
 	}
 	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"version": "4.22.14", "upgradeStartTime": nil}}}))
 	if read().Spec.Release.Version != "4.22.14" {

@@ -165,7 +165,6 @@ properties:
             type: string
           upgradeStartTime:
             format: date-time
-            nullable: true
             type: string
           version:
             maxLength: 63
