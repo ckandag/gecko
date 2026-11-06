@@ -94,8 +94,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Gate: cluster placement must be ready.
-	managementCluster := placedManagementCluster(&cluster)
-	if managementCluster == "" {
+	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
 		if setWaitingNPConditions(&np, "PlacementNotReady", "Waiting for cluster placement to select a management cluster") {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
@@ -103,12 +102,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
-	}
-
-	// Read existing transport feedback before resolving or applying a new target
-	// for pools created before status.version was introduced.
-	if privatev1.NodePoolVersionObservationRequired(&np) {
-		return r.backfillObservedVersion(ctx, &np, &cluster, managementCluster)
 	}
 
 	// Gate: nodepool VR must be ready.
@@ -201,6 +194,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("build group key: %w", err)
 	}
+
+	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
 	mwStatus, err := r.applyResources(ctx, &np, managementCluster, groupKey, manifests)
 	if err != nil {
@@ -308,36 +303,6 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 	log.Infof(ctx, "nodepool reconciler: finalizer removed for nodepool %s", np.Name)
 	return reconcile.Result{}, nil
-}
-
-// placedManagementCluster returns the selected management cluster, if any.
-func placedManagementCluster(cluster *privatev1.Cluster) string {
-	if cluster.Status.PlacementResult == nil {
-		return ""
-	}
-	return cluster.Status.PlacementResult.ManagementClusterName
-}
-
-// backfillObservedVersion only reads transport feedback: no target manifests are
-// dispatched until an existing pool has an observed version for upgrade checks.
-func (r *Reconciler) backfillObservedVersion(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, managementCluster string) (reconcile.Result, error) {
-	groupKey, err := transport.NodePoolGroupKey(np.Namespace, np.Spec.ClusterID, np.Name)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("build group key for version observation: %w", err)
-	}
-	status, err := r.transport.GetStatus(ctx, managementCluster, groupKey)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("read NodePool version feedback: %w", err)
-	}
-	if status != nil && status.Stale {
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
-	}
-	if r.applyStatusConditions(np, string(cluster.UID), status) {
-		if err := r.client.Status().Update(ctx, np); err != nil && !apierrors.IsConflict(err) {
-			return reconcile.Result{}, fmt.Errorf("persist observed NodePool version: %w", err)
-		}
-	}
-	return reconcile.Result{RequeueAfter: requeuePending}, nil
 }
 
 // preparationFailure reports a confirmed failure before dispatch. The upgrade

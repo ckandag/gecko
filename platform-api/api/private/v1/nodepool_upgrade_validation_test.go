@@ -115,14 +115,14 @@ func TestNodePoolInitialInstallationUnchanged(t *testing.T) {
 	}
 }
 
-func TestLegacyNodePoolRequiresObservedVersionBeforeReleaseChanges(t *testing.T) {
+func TestSubmittedNodePoolWaitsForObservedVersionBeforeReleaseChanges(t *testing.T) {
 	for _, state := range []metav1.ConditionStatus{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown} {
 		t.Run(string(state), func(t *testing.T) {
 			old := upgradeValidationPool()
 			old.Status.Version = ""
 			old.Status.Conditions = []metav1.Condition{{Type: "NodePoolHealthy", Status: state, Reason: "Observed"}}
-			if NodePoolReleaseApproved(old) {
-				t.Fatal("existing pool must wait for observed version")
+			if !NodePoolReleaseApproved(old) {
+				t.Fatal("the configured installation release must continue reconciling")
 			}
 			changed := old.DeepCopy()
 			changed.Spec.Release.Version = "4.22.16"

@@ -180,37 +180,43 @@ func TestDispatchErrorDoesNotUnlockAnUncertainUpgrade(t *testing.T) {
 	require.ErrorContains(t, changed.ValidateUpdate(t.Context(), uncertain), "accepted upgrade is active")
 }
 
-func TestExistingPoolVersionIsBackfilledBeforeAnyTargetApply(t *testing.T) {
-	for _, tc := range []struct {
-		name, version string
-		stale         bool
-	}{
-		{name: "fresh observed version", version: "4.22.14"},
-		{name: "missing observed version"},
-		{name: "stale feedback", version: "4.22.14", stale: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pool, cluster, release := pipelineObjects()
-			pool.Status.Version = ""
-			r, c := testReconciler(t, pool, cluster, release)
-			vr, install, tr := pipelineControllers(t, c)
-			group, err := transport.NodePoolGroupKey(pool.Namespace, pool.Spec.ClusterID, pool.Name)
-			require.NoError(t, err)
-			key := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "nodepools", "clusters-"+string(cluster.UID), pool.Name)
-			tr.StatusOverrides["test-mc/"+group] = &transport.Status{Stale: tc.stale, ResourceStatuses: map[string]map[string]string{key: {"version": tc.version, "readyCondition": "True", "allNodesHealthyCondition": "True", "allMachinesReadyCondition": "True"}}}
-			_, err = vr.Reconcile(t.Context(), poolRequest())
-			require.NoError(t, err)
-			require.Equal(t, "old-image", getPool(t, c).Status.VersionResolution.ReleaseImage)
-			_, err = install.Reconcile(t.Context(), poolRequest())
-			require.NoError(t, err)
-			require.Empty(t, tr.ApplyCalls, "version discovery must not dispatch any target")
-			observed := ""
-			if !tc.stale {
-				observed = tc.version
-			}
-			require.Equal(t, observed, getPool(t, c).Status.Version)
-			reconcilePool(t, r)
-			require.Equal(t, observed != "", privatev1.NodePoolUpgradeActive(getPool(t, c)))
-		})
+func TestInitialVersionIsReportedThroughNormalInstallationFeedback(t *testing.T) {
+	pool, cluster, release := pipelineObjects()
+	pool.Status = privatev1.NodePoolStatus{}
+	r, c := testReconciler(t, pool, cluster, release)
+	vr, install, tr := pipelineControllers(t, c)
+	group, err := transport.NodePoolGroupKey(pool.Namespace, pool.Spec.ClusterID, pool.Name)
+	require.NoError(t, err)
+	key := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "nodepools", "clusters-"+string(cluster.UID), pool.Name)
+	feedback := &transport.Status{
+		Conditions:       []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
+		ResourceStatuses: map[string]map[string]string{key: {"readyCondition": "True", "allNodesHealthyCondition": "True", "allMachinesReadyCondition": "True"}},
 	}
+	tr.StatusOverrides["test-mc/"+group] = feedback
+	reconcilePool(t, r)
+	_, err = vr.Reconcile(t.Context(), poolRequest())
+	require.NoError(t, err)
+	_, err = install.Reconcile(t.Context(), poolRequest())
+	require.NoError(t, err)
+	require.Equal(t, "target-image", appliedImage(t, tr))
+	submitted := getPool(t, c)
+	require.Empty(t, submitted.Status.Version)
+	changed := submitted.DeepCopy()
+	changed.Spec.Release.Version = "4.22.17"
+	require.ErrorContains(t, changed.ValidateUpdate(t.Context(), submitted), "observed NodePool version")
+	feedback.ResourceStatuses[key]["version"] = "4.22.16"
+	feedback.Stale = true
+	_, err = install.Reconcile(t.Context(), poolRequest())
+	require.NoError(t, err)
+	require.Empty(t, getPool(t, c).Status.Version, "stale feedback must not establish a version")
+	feedback.Stale = false
+	_, err = install.Reconcile(t.Context(), poolRequest())
+	require.NoError(t, err)
+	observed := getPool(t, c)
+	require.Equal(t, "4.22.16", observed.Status.Version)
+	reconcilePool(t, r)
+	require.False(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+	changed = observed.DeepCopy()
+	changed.Spec.Release.Version = "4.22.17"
+	require.NoError(t, changed.ValidateUpdate(t.Context(), observed))
 }
