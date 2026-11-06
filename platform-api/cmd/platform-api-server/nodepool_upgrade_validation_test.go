@@ -51,9 +51,9 @@ func TestNodePoolUpgradeValidator(t *testing.T) {
 		{name: "missing Cluster", change: func(p *privatev1.NodePool) { p.Spec.ClusterID = "missing" }, want: "Cluster does not exist"},
 		{name: "outside channel", change: func(p *privatev1.NodePool) { p.Spec.Release.ChannelGroup = "fast" }, want: "channel group"},
 		{name: "unknown observed version", change: func(p *privatev1.NodePool) { p.Status.Version = "" }, want: "must be observed"},
-		{name: "active release change", change: func(p *privatev1.NodePool) {
+		{name: "pending target while pool is progressing", change: func(p *privatev1.NodePool) {
 			p.Status.Conditions = []metav1.Condition{{Type: "NodePoolProgressing", Status: metav1.ConditionTrue}}
-		}, want: "in progress"},
+		}},
 		{name: "target not newer", change: func(p *privatev1.NodePool) { p.Status.Version = "4.22.16"; p.Spec.Release.Version = "4.22.16" }, want: "newer than"},
 		{name: "invalid observed version", change: func(p *privatev1.NodePool) { p.Status.Version = "bad"; p.Spec.Release.Version = "bad" }, want: "observed NodePool version is invalid"},
 		{name: "unsupported minor step", change: func(p *privatev1.NodePool) { p.Status.Version = "4.20.14"; p.Spec.Release.Version = "4.20.14" }, want: "next-minor"},

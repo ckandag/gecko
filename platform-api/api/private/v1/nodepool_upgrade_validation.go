@@ -111,9 +111,6 @@ func ValidateNodePoolUpgradeTarget(pool *NodePool, cluster *Cluster, release *Ve
 	if pool.Status.Version == "" || cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
 		return fmt.Errorf("nodepool and control-plane versions must be observed before requesting an upgrade")
 	}
-	if meta.IsStatusConditionTrue(pool.Status.Conditions, "NodePoolProgressing") {
-		return fmt.Errorf("the NodePool already has a release change in progress")
-	}
 	current, err := utilversion.ParseSemantic(pool.Status.Version)
 	if err != nil {
 		return fmt.Errorf("the observed NodePool version is invalid")

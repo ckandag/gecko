@@ -358,3 +358,23 @@ func TestMissingUpgradeDependencyIsRetryable(t *testing.T) {
 		})
 	}
 }
+func TestPendingScheduleCanChangeWhilePoolProgresses(t *testing.T) {
+	pool, cluster, release := testObjects()
+	pool.Spec.Release.UpgradeStartTime = ptr.To(metav1.NewTime(testNow.Add(time.Hour)))
+	meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{Type: "NodePoolProgressing", Status: metav1.ConditionTrue, Reason: "UpdatingConfig", ObservedGeneration: pool.Generation})
+	r, c := testReconciler(t, pool, cluster, release)
+	reconcilePool(t, r)
+	changed := getPool(t, c)
+	changed.Spec.Release.UpgradeStartTime = ptr.To(metav1.NewTime(testNow.Add(2 * time.Hour)))
+	require.NoError(t, changed.ValidateUpdate(t.Context(), getPool(t, c)))
+	changed.Generation++
+	require.NoError(t, c.Update(t.Context(), changed))
+	r.now = func() time.Time { return changed.Spec.Release.UpgradeStartTime.Time }
+	reconcilePool(t, r)
+	require.False(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+	updated := getPool(t, c)
+	healthy(updated)
+	require.NoError(t, c.Status().Update(t.Context(), updated))
+	reconcilePool(t, r)
+	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+}
