@@ -330,3 +330,28 @@ func TestTransientReadFailureDoesNotRejectUpgrade(t *testing.T) {
 	reconcilePool(t, r)
 	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
 }
+
+func TestMissingUpgradeDependencyIsRetryable(t *testing.T) {
+	for _, kind := range []string{"Cluster", "Version"} {
+		t.Run(kind, func(t *testing.T) {
+			pool, cluster, release := testObjects()
+			objects := []client.Object{pool}
+			var missing client.Object = release
+			if kind == "Cluster" {
+				objects = append(objects, release)
+				missing = cluster
+			} else {
+				objects = append(objects, cluster)
+			}
+			r, c := testReconciler(t, objects...)
+			_, err := r.Reconcile(t.Context(), poolRequest())
+			require.True(t, apierrors.IsNotFound(err), "lookup misses must trigger a retry")
+			rejected := getPool(t, c)
+			require.False(t, meta.IsStatusConditionTrue(rejected.Status.Conditions, conditionDegraded))
+			require.False(t, privatev1.NodePoolUpgradeActive(rejected))
+			require.NoError(t, c.Create(t.Context(), missing))
+			reconcilePool(t, r)
+			require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+		})
+	}
+}

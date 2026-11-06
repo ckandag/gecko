@@ -139,16 +139,10 @@ func (e *validationError) Error() string { return e.message }
 func (r *Reconciler) validate(ctx context.Context, pool *privatev1.NodePool, target string) error {
 	var cluster privatev1.Cluster
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.ClusterID}, &cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			return &validationError{"The referenced Cluster does not exist"}
-		}
 		return fmt.Errorf("read Cluster for upgrade: %w", err)
 	}
 	var release privatev1.Version
 	if err := r.client.Get(ctx, types.NamespacedName{Name: target}, &release); err != nil {
-		if apierrors.IsNotFound(err) {
-			return &validationError{"The target version is not in the platform catalog"}
-		}
 		return fmt.Errorf("read Version for upgrade: %w", err)
 	}
 	if err := privatev1.ValidateNodePoolUpgradeTarget(pool, &cluster, &release, target); err != nil {
