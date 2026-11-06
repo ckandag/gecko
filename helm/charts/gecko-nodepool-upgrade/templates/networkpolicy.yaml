@@ -12,10 +12,7 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-  ingress:
-    - ports:
-        - protocol: TCP
-          port: {{ .Values.healthProbePort }}
+  ingress: []
   egress:
     - ports:
         - protocol: UDP
