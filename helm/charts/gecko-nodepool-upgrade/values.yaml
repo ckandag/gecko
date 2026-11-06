@@ -15,6 +15,17 @@ logFormat: json
 workers: 10
 healthProbePort: 8081
 
+networkPolicy:
+  enabled: true
+  # Restrict these to the API server ranges when known. In-cluster API traffic
+  # normally uses TCP 443; direct orlopURL deployments must set its port here.
+  apiServerCIDRs:
+    - 0.0.0.0/0
+    - ::/0
+  apiServerPort: 443
+  # Additional rules for environment-specific dependencies.
+  extraEgress: []
+
 serviceAccount:
   create: true
   annotations: {}
