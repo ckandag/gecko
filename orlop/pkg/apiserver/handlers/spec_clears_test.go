@@ -193,8 +193,14 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 			if hasRemoved == tt.removeMapKey {
 				t.Fatal("map key deletion was not preserved")
 			}
-			if updated.Spec.NodeSelector["keep"] != "value" || updated.Spec.ActiveDeadlineSeconds == nil || *updated.Spec.ActiveDeadlineSeconds != preciseInteger || updated.Status.Phase != corev1.PodRunning {
-				t.Fatal("request changed unrelated or private data")
+			if updated.Spec.NodeSelector["keep"] != "value" {
+				t.Fatal("request changed an unrelated public field")
+			}
+			if updated.Spec.ActiveDeadlineSeconds == nil || *updated.Spec.ActiveDeadlineSeconds != preciseInteger {
+				t.Fatal("request changed a private field or lost integer precision")
+			}
+			if updated.Status.Phase != corev1.PodRunning {
+				t.Fatal("request changed controller-owned status")
 			}
 			generation := updated.Generation
 			send()

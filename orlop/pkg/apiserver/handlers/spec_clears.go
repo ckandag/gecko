@@ -17,9 +17,10 @@ func (h *ConvertingResourceHandler) convertPublicInputToPrivate(publicObj, exist
 }
 
 // applyPublicSpecClears restores explicit nulls lost when an omitempty public
-// pointer is marshaled during conversion. For merge patches, oldPublic also
-// identifies fields removed by the patch. Both maps have passed public schema
-// processing, so this cannot clear private-only fields or controller status.
+// pointer is marshaled during conversion. public is the schema-processed input.
+// oldPublic is nil for PUT; PATCH supplies the stored public representation from
+// before the patch, so removed public fields can be identified. Only public spec
+// fields contribute deletions; private fields and controller status are preserved.
 // PUT omissions retain their existing preservation semantics.
 func (h *ConvertingResourceHandler) applyPublicSpecClears(obj runtime.Object, public, oldPublic map[string]interface{}) (runtime.Object, error) {
 	spec, _ := public["spec"].(map[string]interface{})
@@ -52,6 +53,10 @@ func (h *ConvertingResourceHandler) applyPublicSpecClears(obj runtime.Object, pu
 	return result, nil
 }
 
+// publicFieldClears collects explicit nulls and keys removed from public object
+// maps. previous is nil for PUT and contains the pre-patch public spec for PATCH.
+// Array values pass through the existing conversion path; this helper does not
+// collect deletions inside array elements.
 func publicFieldClears(current, previous map[string]interface{}) map[string]interface{} {
 	clears := make(map[string]interface{})
 	for key, value := range current {
