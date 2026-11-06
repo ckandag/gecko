@@ -256,6 +256,9 @@ func TestInitialInstallationAndObservedReleaseAreUntouched(t *testing.T) {
 		t.Run(current, func(t *testing.T) {
 			pool, cluster, release := testObjects()
 			pool.Status.Version = current
+			if current == "" {
+				pool.Status.Conditions = nil
+			}
 			r, c := testReconciler(t, pool, cluster, release)
 			before := getPool(t, c)
 			reconcilePool(t, r)

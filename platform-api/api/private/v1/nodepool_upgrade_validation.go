@@ -35,6 +35,9 @@ func (p *NodePool) ValidateUpdate(ctx context.Context, oldObj runtime.Object) er
 		return fmt.Errorf("spec.release.upgradeStartTime must be a valid timestamp")
 	}
 	if old.Status.Version == "" {
+		if NodePoolVersionObservationRequired(old) {
+			return fmt.Errorf("the observed NodePool version must be populated before changing spec.release")
+		}
 		if p.Spec.Release.UpgradeStartTime != nil {
 			return fmt.Errorf("spec.release.upgradeStartTime may only be set after the NodePool has been installed")
 		}
@@ -71,7 +74,17 @@ const (
 // NodePoolReleaseApproved permits initial installation and maintenance of the
 // observed release. A new release requires persisted coordinator approval.
 func NodePoolReleaseApproved(pool *NodePool) bool {
-	return pool.Status.Version == "" || pool.Spec.Release.Version == pool.Status.Version || NodePoolUpgradeActive(pool)
+	return (pool.Status.Version == "" && !NodePoolVersionObservationRequired(pool)) ||
+		pool.Spec.Release.Version == pool.Status.Version || NodePoolUpgradeActive(pool)
+}
+
+// NodePoolVersionObservationRequired identifies a previously submitted pool that
+// needs its observed version backfilled. Healthy feedback or successful resource
+// submission distinguishes it from initial installation before the first apply.
+func NodePoolVersionObservationRequired(pool *NodePool) bool {
+	return pool.Status.Version == "" &&
+		(meta.FindStatusCondition(pool.Status.Conditions, "NodePoolHealthy") != nil ||
+			meta.IsStatusConditionTrue(pool.Status.Conditions, "NodePoolResourcesApplied"))
 }
 
 // NodePoolUpgradeActive is also the admission lock on release settings. It must

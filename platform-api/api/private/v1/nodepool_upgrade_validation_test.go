@@ -114,3 +114,36 @@ func TestNodePoolInitialInstallationUnchanged(t *testing.T) {
 		t.Fatal("scheduling requires an installed pool")
 	}
 }
+
+func TestLegacyNodePoolRequiresObservedVersionBeforeReleaseChanges(t *testing.T) {
+	for _, state := range []metav1.ConditionStatus{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown} {
+		t.Run(string(state), func(t *testing.T) {
+			old := upgradeValidationPool()
+			old.Status.Version = ""
+			old.Status.Conditions = []metav1.Condition{{Type: "NodePoolHealthy", Status: state, Reason: "Observed"}}
+			if NodePoolReleaseApproved(old) {
+				t.Fatal("existing pool must wait for observed version")
+			}
+			changed := old.DeepCopy()
+			changed.Spec.Release.Version = "4.22.16"
+			if err := changed.ValidateUpdate(t.Context(), old); err == nil || !strings.Contains(err.Error(), "observed NodePool version") {
+				t.Fatalf("got %v, want observed-version gate", err)
+			}
+			scaled := old.DeepCopy()
+			scaled.Spec.NodeCount = ptr.To(int32(3))
+			if err := scaled.ValidateUpdate(t.Context(), old); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	initial := upgradeValidationPool()
+	initial.Status = NodePoolStatus{VersionResolution: &VersionResolutionResult{ReleaseVersion: "4.22.14"}}
+	changed := initial.DeepCopy()
+	changed.Spec.Release.Version = "4.22.16"
+	if err := changed.ValidateUpdate(t.Context(), initial); err != nil {
+		t.Fatal("initial installation release changes must remain possible:", err)
+	}
+	if !NodePoolReleaseApproved(changed) {
+		t.Fatal("initial installation needs no upgrade approval")
+	}
+}
