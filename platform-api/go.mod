@@ -16,7 +16,6 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/apiserver v0.37.2
-	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -107,7 +106,7 @@ require (
 	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.1.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.9.0 // indirect
 	github.com/twmb/murmur3 v1.2.2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -160,6 +159,7 @@ require (
 	k8s.io/kms v0.37.2 // indirect
 	k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098 // indirect
 	k8s.io/streaming v0.37.2 // indirect
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.37.0 // indirect
 	sigs.k8s.io/controller-tools v0.23.0 // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect

@@ -15,9 +15,7 @@ require (
 	google.golang.org/grpc v1.85.0
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
-	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	sigs.k8s.io/controller-runtime v0.25.2
-	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -72,7 +70,7 @@ require (
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.73.1 // indirect
 	github.com/prometheus/procfs v0.23.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.1.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 // indirect
@@ -102,9 +100,11 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098 // indirect
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
 replace github.com/openshift-online/gecko/platform-api => ../platform-api
