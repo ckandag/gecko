@@ -158,10 +158,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	manifests, err := manifest.Build(mwInput)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("%s: build manifests: %w", adapterName, err)
+		return reconcile.Result{}, r.preparationFailure(ctx, &cluster, err)
 	}
 
-	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, groupKey, manifests)
+	mwStatus, err := r.applyResources(ctx, &cluster, placement.ManagementClusterName, groupKey, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("%s: apply resources: %w", adapterName, err)
 	}
@@ -222,16 +222,16 @@ func (r *Reconciler) prerequisitesReady(ctx context.Context, cluster *privatev1.
 		return false, nil
 	}
 
-	if cluster.Status.VersionResolution.ReleaseVersion != cluster.Spec.Release.Version {
+	if cluster.Status.VersionResolution.ReleaseVersion != privatev1.ClusterInstallationVersion(cluster) {
 		msg := fmt.Sprintf("VR version %q does not match spec version %q",
-			cluster.Status.VersionResolution.ReleaseVersion, cluster.Spec.Release.Version)
+			cluster.Status.VersionResolution.ReleaseVersion, privatev1.ClusterInstallationVersion(cluster))
 		if r.setWaitingConditions(cluster, "VersionMismatch", msg) {
 			if err := r.client.Status().Update(ctx, cluster); err != nil && !apierrors.IsConflict(err) {
 				return false, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 			}
 		}
 		log.Infof(ctx, "vr version %q does not match spec version %q, requeueing after %s",
-			cluster.Status.VersionResolution.ReleaseVersion, cluster.Spec.Release.Version, requeuePending)
+			cluster.Status.VersionResolution.ReleaseVersion, privatev1.ClusterInstallationVersion(cluster), requeuePending)
 		return false, nil
 	}
 

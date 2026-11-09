@@ -74,29 +74,22 @@ func validateParentOnCreate(ctx context.Context, objMap map[string]interface{}) 
 // ValidateParentExists verifies that the parent referenced by a child exists
 // and is not being deleted.
 func ValidateParentExists(ctx context.Context, parentStore storage.ResourceStore, namespace, idField string, objMap map[string]interface{}) error {
-	_, err := GetParentOnCreate(ctx, parentStore, namespace, idField, objMap)
-	return err
-}
-
-// GetParentOnCreate validates a child resource's parent and returns its stored
-// object so resource-specific create validation can inspect its current state.
-func GetParentOnCreate(ctx context.Context, parentStore storage.ResourceStore, namespace, idField string, objMap map[string]interface{}) (client.Object, error) {
 	if parentStore == nil {
-		return nil, nil
+		return nil
 	}
 
 	parentID := fieldValueFromMap(objMap, idField)
 	parent, err := parentStore.Get(ctx, namespace, parentID)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return nil, &invalidParentError{message: fmt.Sprintf("referenced parent %q not found", parentID)}
+			return &invalidParentError{message: fmt.Sprintf("referenced parent %q not found", parentID)}
 		}
-		return nil, fmt.Errorf("get referenced parent %q: %w", parentID, err)
+		return fmt.Errorf("get referenced parent %q: %w", parentID, err)
 	}
 	if parent.GetDeletionTimestamp() != nil {
-		return nil, &invalidParentError{message: fmt.Sprintf("referenced parent %q is being deleted", parentID)}
+		return &invalidParentError{message: fmt.Sprintf("referenced parent %q is being deleted", parentID)}
 	}
-	return parent, nil
+	return nil
 }
 
 func validateParentOwnership(ctx context.Context, obj client.Object) bool {

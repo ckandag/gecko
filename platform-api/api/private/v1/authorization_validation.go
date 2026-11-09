@@ -39,10 +39,6 @@ var validAuthorizationPermissions = map[string]struct{}{
 	"role.get":           {},
 	"role.update":        {},
 	"role.delete":        {},
-
-	"controlplaneupgraderequest.create": {},
-	"controlplaneupgraderequest.list":   {},
-	"controlplaneupgraderequest.get":    {},
 }
 
 // ValidAuthorizationPermissions returns the complete set of permissions

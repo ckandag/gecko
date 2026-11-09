@@ -389,3 +389,26 @@ func TestNextChannelVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestReconciler_PendingReleaseKeepsObservedImage(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(fmt.Sprint(approved), func(t *testing.T) {
+			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 2}}
+			cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.23.9", ChannelGroup: "stable"}
+			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+			target := "4.22.19"
+			if approved {
+				target = "4.23.9"
+				cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: target}
+				cluster.Status.Conditions = []metav1.Condition{{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue}}
+			}
+			r, store := buildReconciler(t, cluster, catalogVersion(target, "selected-image", "stable"))
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			resolved := store.statusWriter.captured.(*privatev1.Cluster).Status.VersionResolution
+			require.Equal(t, target, resolved.ReleaseVersion)
+			require.Equal(t, "selected-image", resolved.ReleaseImage)
+			require.Equal(t, "4.23.9", cluster.Spec.Release.Version)
+		})
+	}
+}

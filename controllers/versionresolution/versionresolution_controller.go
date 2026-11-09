@@ -50,7 +50,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("vr: get cluster %s: %w", clusterID, err)
 	}
 
-	if cluster.Spec.Release.Version == "" {
+	version := privatev1.ClusterInstallationVersion(&cluster)
+	if version == "" {
 		r.log.Infof(ctx, "vr: cluster %s: release version not set, waiting for next event", clusterID)
 		if meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "VersionResolved",
@@ -70,11 +71,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) {
 		return reconcile.Result{}, nil
 	}
-	version := cluster.Spec.Release.Version
 
 	channelGroup := channelutil.DefaultChannelGroup
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
+	}
+
+	// Pending release/channel intent must not invalidate the currently installed
+	// image. Keep its previously resolved channel until the new release is approved.
+	if !privatev1.ClusterReleaseApproved(&cluster) && cluster.Status.VersionResolution != nil && cluster.Status.VersionResolution.ChannelGroup != "" {
+		channelGroup = cluster.Status.VersionResolution.ChannelGroup
 	}
 
 	channelVersion := version

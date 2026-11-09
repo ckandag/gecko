@@ -138,17 +138,13 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	parent, err := GetParentOnCreate(r.Context(), h.parentStore, namespace, h.parentIDField, objMap)
-	if err != nil {
+	if err := ValidateParentExists(r.Context(), h.parentStore, namespace, h.parentIDField, objMap); err != nil {
 		status := http.StatusInternalServerError
 		if isInvalidParentError(err) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, err.Error())
 		return
-	}
-	if parent != nil {
-		r = r.WithContext(types.WithParentObject(r.Context(), parent))
 	}
 
 	// Convert to public typed object

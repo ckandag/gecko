@@ -1458,3 +1458,42 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "cleanup should have been called before finalizer removal failed")
 	require.True(t, storeClient.updateCalled)
 }
+
+func TestReconcile_PendingUpgradeContinuesObservedRelease(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.22.19")
+	cluster.Spec.Release.Version = "4.23.9"
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+	tr := mock.New()
+	r, _ := buildReconciler(t, cluster, nil, tr, nil)
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "pending intent must not stop existing release maintenance")
+	for _, manifest := range tr.ApplyCalls[0].Manifests {
+		require.NotContains(t, string(manifest), "4.23.9", "unapproved target must not reach any applied manifest")
+	}
+}
+
+func TestReconcile_ApprovedUpgradePersistsDispatchBoundaryBeforeApply(t *testing.T) {
+	for _, statusErr := range []error{nil, fmt.Errorf("status unavailable"), conflictErr()} {
+		name := "successful write"
+		if statusErr != nil {
+			name = statusErr.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			cluster := buildReadyCluster("cluster-abc", "4.23.9")
+			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9"}
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue})
+			tr := mock.New()
+			r, store := buildReconciler(t, cluster, nil, tr, statusErr)
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			if statusErr != nil && !apierrors.IsConflict(statusErr) {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Empty(t, tr.ApplyCalls, "dispatch must wait for a successful, durable boundary write")
+			require.Equal(t, metav1.ConditionUnknown, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted).Status)
+		})
+	}
+}

@@ -17,25 +17,32 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
-	publicv1 "github.com/openshift-online/gecko/platform-api/api/public/v1"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-func TestPublicAPIUpgradeRequestRejectsUnadvertisedTarget(t *testing.T) {
+func TestPublicAPIClusterUpgradeValidatesStoredRelease(t *testing.T) {
 	privatePort, publicPort := freePublicAPITestPort(t), freePublicAPITestPort(t)
 	privateScheme := getPrivateScheme()
 	clusterGVK := privatev1.GroupVersion.WithKind("Cluster")
-	requestGVK := privatev1.GroupVersion.WithKind("ControlPlaneUpgradeRequest")
 	clusterStore := memory.NewMemoryStore(apiserver.GroupKindResourceType(clusterGVK.GroupKind()), privateScheme, clusterGVK)
-	requestStore := memory.NewMemoryStore(apiserver.GroupKindResourceType(requestGVK.GroupKind()), privateScheme, requestGVK)
 	cluster := testCluster("customer-project", "example-cluster", "us-central1")
-	cluster.Spec.Release.Version = "4.15.0"
+	cluster.Spec.Release.Version = "4.22.19"
+	cluster.Spec.Release.ChannelGroup = "stable"
+	cluster.Spec.Platform.GCP = &privatev1.GCPClusterPlatform{
+		ProjectID: "customer-project", Region: "us-central1", Network: "network", Subnet: "subnet",
+		WorkloadIdentity: privatev1.WorkloadIdentitySpec{PoolID: "pool", ProjectNumber: "123456789", ProviderID: "provider",
+			ServiceAccountsRef: &privatev1.ServiceAccountsRef{
+				NodePoolEmail: "nodepool@example.iam.gserviceaccount.com", ControlPlaneEmail: "control@example.iam.gserviceaccount.com",
+				CloudControllerEmail: "cloud@example.iam.gserviceaccount.com", StorageEmail: "storage@example.iam.gserviceaccount.com",
+				ImageRegistryEmail: "registry@example.iam.gserviceaccount.com", NetworkEmail: "network@example.iam.gserviceaccount.com",
+			},
+		},
+	}
+
 	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
-		Version: "4.15.0", DesiredVersion: "4.15.0", AvailableUpdates: []string{"4.15.1"},
+		Version: "4.22.19", DesiredVersion: "4.22.19", AvailableUpdates: []string{"4.23.9"},
 	}
 	if err := clusterStore.Create(t.Context(), cluster); err != nil {
 		t.Fatal(err)
@@ -52,8 +59,6 @@ func TestPublicAPIUpgradeRequestRejectsUnadvertisedTarget(t *testing.T) {
 			switch gvk.Kind {
 			case "Cluster":
 				return clusterStore, nil
-			case "ControlPlaneUpgradeRequest":
-				return requestStore, nil
 			}
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 		},
@@ -86,25 +91,23 @@ func TestPublicAPIUpgradeRequestRejectsUnadvertisedTarget(t *testing.T) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", publicPort)
 	client := &http.Client{Timeout: 3 * time.Second}
 	waitForPublicAPITestServer(t, client, baseURL+"/apis", runDone, &runErr)
-	for i, path := range []string{
-		"/apis/gcp.managed.openshift.io/v1/namespaces/customer-project/controlplaneupgraderequests",
-		"/apis/gcp.managed.openshift.io/v1/namespaces/customer-project/clusters/example-cluster/controlplaneupgraderequests/",
+	for _, test := range []struct {
+		name, version string
+		status        int
+	}{
+		{name: "unadvertised minor", version: "4.24", status: http.StatusBadRequest},
+		{name: "supported minor", version: "4.23", status: http.StatusOK},
 	} {
-		t.Run(path, func(t *testing.T) {
-			name := fmt.Sprintf("unadvertised-target-%d", i)
-			body, err := json.Marshal(&publicv1.ControlPlaneUpgradeRequest{
-				TypeMeta:   metav1.TypeMeta{APIVersion: publicv1.GroupVersion.String(), Kind: "ControlPlaneUpgradeRequest"},
-				ObjectMeta: metav1.ObjectMeta{Name: name},
-				Spec:       publicv1.ControlPlaneUpgradeRequestSpec{ClusterID: cluster.Name, TargetVersion: "4.15.2"},
-			})
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{"release": map[string]string{"version": test.version}}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+path, bytes.NewReader(body))
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, baseURL+"/apis/gcp.managed.openshift.io/v1/namespaces/customer-project/clusters/example-cluster", bytes.NewReader(body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Content-Type", "application/merge-patch+json")
 			response, err := client.Do(request)
 			if err != nil {
 				t.Fatal(err)
@@ -114,11 +117,36 @@ func TestPublicAPIUpgradeRequestRejectsUnadvertisedTarget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(data), "not an available control-plane upgrade") {
-				t.Fatalf("expected target validation to return HTTP 400, got %d: %s", response.StatusCode, data)
+			if response.StatusCode != test.status {
+				t.Fatalf("HTTP status=%d, want %d: %s", response.StatusCode, test.status, data)
 			}
-			if _, err := requestStore.Get(t.Context(), cluster.Namespace, name); !apierrors.IsNotFound(err) {
-				t.Fatalf("rejected request was persisted: %v", err)
+			if test.status == http.StatusBadRequest && !strings.Contains(string(data), "advertised") {
+				t.Fatalf("expected target validation error: %s", data)
+			}
+			stored, err := clusterStore.Get(t.Context(), cluster.Namespace, cluster.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual privatev1.Cluster
+			if err := json.Unmarshal(raw, &actual); err != nil {
+				t.Fatal(err)
+			}
+			expected := "4.22.19"
+			if test.status == http.StatusOK {
+				expected = test.version
+			}
+			if actual.Spec.Release.Version != expected {
+				t.Fatalf("persisted desired version=%s, want %s", actual.Spec.Release.Version, expected)
+			}
+			if actual.Status.HostedClusterResult.Version != "4.22.19" {
+				t.Fatal("request advanced observed version")
+			}
+			if test.status == http.StatusOK && privatev1.ClusterReleaseApproved(&actual) {
+				t.Fatal("public PATCH bypassed upgrade approval")
 			}
 		})
 	}
