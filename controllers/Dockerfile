@@ -11,7 +11,7 @@ COPY platform-api/ platform-api/
 COPY controllers/ controllers/
 RUN cd controllers && CGO_ENABLED=0 GOOS=linux go build -o /opt/app-root/src/gecko-controllers .
 
-FROM registry.access.redhat.com/ubi9/ubi-micro:9.8-1793860449
+FROM registry.access.redhat.com/ubi9/ubi-micro:9.8-1794184668
 
 LABEL name="gecko-controllers" \
       com.redhat.component="gecko-controllers" \
