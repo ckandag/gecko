@@ -1098,3 +1098,17 @@ func TestReconcile_ObservedTargetKeepsLockUntilHealthy(t *testing.T) {
 	require.True(t, privatev1.ClusterUpgradeActive(store.cluster), "an observed target proves dispatch even if its acknowledgement was lost")
 	require.Nil(t, store.cluster.Status.ControlPlaneUpgrade.CompletedTime)
 }
+
+func TestReconcile_ChannelRepairRetriesTargetSelection(t *testing.T) {
+	cluster := readyCluster("4.22.19", []string{"4.22.20"})
+	r, store := buildReconciler(t, cluster)
+	store.persistUpdates = true
+	store.channel.Spec.FleetMinorVersion = "invalid"
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded))
+	store.channel.Spec.FleetMinorVersion = "4.22"
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Equal(t, "4.22.20", store.cluster.Spec.Release.Version, "channel repair must recover without a customer spec edit")
+}
