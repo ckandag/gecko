@@ -663,7 +663,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Convert public to private, preserving internal fields
-	privateObj, err := h.convertPublicInputToPrivate(publicObj, existingPrivate, objMap, nil)
+	privateObj, err := h.convertPublicInputToPrivate(publicObj, existingPrivate, objMap, oldObjMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert to private: %v", err))
 		return

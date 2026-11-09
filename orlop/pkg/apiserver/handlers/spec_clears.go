@@ -17,12 +17,17 @@ func (h *ConvertingResourceHandler) convertPublicInputToPrivate(publicObj, exist
 
 // applyPublicSpecClears restores explicit nulls lost when an omitempty public
 // pointer is marshaled during conversion. public is the schema-processed input.
-// oldPublic is nil for PUT; PATCH supplies the stored public representation from
-// before the patch, so removed public fields can be identified. Only public spec
-// fields contribute deletions; private fields and controller status are preserved.
-// Deleting a public object retains any private descendants from existing, even if
-// conversion already replaced that object with nil. PUT omissions retain their
-// existing preservation semantics.
+// oldPublic is the stored public representation for both PUT and PATCH:
+//   - For PUT it contains the full existing public spec, so any public key
+//     present in oldPublic but absent from the PUT body is treated as an
+//     intentional deletion (standard Kubernetes PUT = full replacement).
+//   - For PATCH it contains the pre-patch public spec, so only fields
+//     explicitly removed or nulled by the patch body are cleared.
+//
+// Only public spec fields contribute deletions; private fields and controller
+// status are preserved. Deleting a public object retains any private
+// descendants from existing, even if conversion already replaced that object
+// with nil.
 func (h *ConvertingResourceHandler) applyPublicSpecClears(obj, existing runtime.Object, public, oldPublic map[string]interface{}) (runtime.Object, error) {
 	spec, _ := public["spec"].(map[string]interface{})
 	oldSpec, _ := oldPublic["spec"].(map[string]interface{})
@@ -33,7 +38,7 @@ func (h *ConvertingResourceHandler) applyPublicSpecClears(obj, existing runtime.
 	// Compare the stored private object with its public projection to identify
 	// private descendants. The projection must come from existing, not the new
 	// public input, which may have removed their parent object altogether.
-	existingPublic, err := h.converter.PrivateToPublic(existing)
+	existingPublic, err := h.convertToPublicObject(existing)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +140,8 @@ func privateObjectFields(private, public interface{}) map[string]interface{} {
 }
 
 // publicFieldClears collects explicit nulls and keys removed from public object
-// maps. previous is nil for PUT and contains the pre-patch public spec for PATCH.
+// maps. previous is the stored public spec for both PUT and PATCH; a key
+// present in previous but absent from current is treated as a deletion.
 // Array values pass through the existing conversion path; this helper does not
 // collect deletions inside array elements.
 func publicFieldClears(current, previous map[string]interface{}) map[string]interface{} {

@@ -147,7 +147,9 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 		{name: "PATCH removes nested object", method: http.MethodPatch, body: `{"spec":{"affinity":{"nodeAffinity":null}}}`, clearNodeAffinity: true},
 		{name: "PATCH removes map key", method: http.MethodPatch, body: `{"spec":{"nodeSelector":{"remove":null}}}`, removeMapKey: true},
 		{name: "PATCH omission preserves object", method: http.MethodPatch, body: `{"spec":{"nodeSelector":{"keep":"value"}}}`},
-		{name: "PUT omission preserves object", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"nodeSelector":{"keep":"value","remove":"value"}}}`},
+		// Standard Kubernetes PUT semantics: a field absent from the PUT body is
+		// cleared, not preserved. The client must supply the full desired spec.
+		{name: "PUT omission clears absent object", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"nodeSelector":{"keep":"value","remove":"value"}}}`, clearAffinity: true},
 		{name: "PUT explicit nullable object is cleared", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"affinity":null,"nodeSelector":{"keep":"value","remove":"value"}}}`, clearAffinity: true},
 		{name: "PATCH preserves private descendants of removed object", method: http.MethodPatch, body: `{"spec":{"affinity":null}}`, clearNodeAffinity: true, privateAffinity: true},
 		{name: "PUT preserves private descendants of null object", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"affinity":null,"nodeSelector":{"keep":"value","remove":"value"}}}`, clearNodeAffinity: true, privateAffinity: true},
