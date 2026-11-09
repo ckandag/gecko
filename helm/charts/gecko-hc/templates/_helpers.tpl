@@ -62,12 +62,8 @@ Validate required values.
 */}}
 {{- define "gecko-hc.validateValues" -}}
 {{- $labels := .Values.customerLabels | default "{}" | mustFromJson -}}
-{{- $tags := .Values.resourceTags | default "[]" | mustFromJson -}}
 {{- if and (not (kindIs "invalid" $labels)) (not (kindIs "map" $labels)) -}}
 {{- fail "customerLabels must be a JSON object" -}}
-{{- end -}}
-{{- if and (not (kindIs "invalid" $tags)) (not (kindIs "slice" $tags)) -}}
-{{- fail "resourceTags must be a JSON list" -}}
 {{- end -}}
 
 {{- $registry := trim (toString .Values.image.registry) -}}

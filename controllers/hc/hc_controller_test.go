@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -265,7 +263,7 @@ func buildReconciler(
 	for _, o := range opts {
 		o(storeClient)
 	}
-	return hc.New(tr, testLogger(t), storeClient, nil, nil, "", ""), storeClient
+	return hc.New(tr, testLogger(t), storeClient, nil, "", ""), storeClient
 }
 
 // ---------------------------------------------------------------------------
@@ -1459,158 +1457,4 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	require.Contains(t, err.Error(), "remove finalizer")
 	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "cleanup should have been called before finalizer removal failed")
 	require.True(t, storeClient.updateCalled)
-}
-
-func TestReconcile_ResourceTags(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		requested        []privatev1.GCPResourceTag
-		configured, want []privatev1.GCPResourceTag
-	}{
-		{name: "none"},
-		{name: "request only", requested: []privatev1.GCPResourceTag{{Key: "env", Value: "prod", ParentID: ptr.To("123456789")}}, want: []privatev1.GCPResourceTag{{Key: "env", Value: "prod", ParentID: ptr.To("123456789")}}},
-		{name: "config only", configured: []privatev1.GCPResourceTag{{Key: "redhat-managed", Value: "true"}}, want: []privatev1.GCPResourceTag{{Key: "redhat-managed", Value: "true"}}},
-		{name: "merged", requested: []privatev1.GCPResourceTag{{Key: "env", Value: "prod"}}, configured: []privatev1.GCPResourceTag{{Key: "redhat-managed", Value: "true", ParentID: ptr.To("123456789")}}, want: []privatev1.GCPResourceTag{{Key: "env", Value: "prod"}, {Key: "redhat-managed", Value: "true", ParentID: ptr.To("123456789")}}},
-		{name: "config overrides entire tag", requested: []privatev1.GCPResourceTag{{Key: "env", Value: "customer", ParentID: ptr.To("987654321")}}, configured: []privatev1.GCPResourceTag{{Key: "env", Value: "platform", ParentID: ptr.To("123456789")}}, want: []privatev1.GCPResourceTag{{Key: "env", Value: "platform", ParentID: ptr.To("123456789")}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cluster := buildReadyCluster("cluster-1", "4.15.0")
-			cluster.Spec.Platform.GCP.ResourceTags = tc.requested
-			tr := mock.New()
-			_, store := buildReconciler(t, cluster, nil, tr, nil)
-			r := hc.New(tr, testLogger(t), store, nil, tc.configured, "", "")
-			for range 2 {
-				_, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-				require.NoError(t, err)
-			}
-			require.Len(t, tr.ApplyCalls, 2)
-			require.Equal(t, tr.ApplyCalls[0].Manifests, tr.ApplyCalls[1].Manifests, "unchanged input must reconcile idempotently")
-			var obj map[string]any
-			require.NoError(t, json.Unmarshal(tr.ApplyCalls[0].Manifests[3], &obj))
-			gcp := obj["spec"].(map[string]any)["platform"].(map[string]any)["gcp"].(map[string]any)
-			if len(tc.want) == 0 {
-				require.NotContains(t, gcp, "resourceTags")
-			} else {
-				raw, err := json.Marshal(gcp["resourceTags"])
-				require.NoError(t, err)
-				want, err := json.Marshal(tc.want)
-				require.NoError(t, err)
-				require.JSONEq(t, string(want), string(raw))
-			}
-			require.Equal(t, tc.requested, cluster.Spec.Platform.GCP.ResourceTags, "must not mutate stored API tags")
-		})
-	}
-}
-
-// The controller always computes desired tags; the Firestore transport preserves
-// the initial submission and reports any mismatch separately.
-func TestReconcile_ResourceTagsConfigurationChangesReachTransport(t *testing.T) {
-	cluster := buildReadyCluster("cluster-1", "4.15.0")
-	tr := mock.New()
-	_, store := buildReconciler(t, cluster, nil, tr, nil)
-	for _, tags := range [][]privatev1.GCPResourceTag{{{Key: "env", Value: "prod"}}, {{Key: "env", Value: "dev"}}, nil} {
-		r := hc.New(tr, testLogger(t), store, nil, tags, "", "")
-		_, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-		require.NoError(t, err)
-		var obj map[string]any
-		require.NoError(t, json.Unmarshal(tr.ApplyCalls[len(tr.ApplyCalls)-1].Manifests[3], &obj))
-		gcp := obj["spec"].(map[string]any)["platform"].(map[string]any)["gcp"].(map[string]any)
-		if len(tags) == 0 {
-			require.NotContains(t, gcp, "resourceTags")
-		} else {
-			raw, err := json.Marshal(gcp["resourceTags"])
-			require.NoError(t, err)
-			want, err := json.Marshal(tags)
-			require.NoError(t, err)
-			require.JSONEq(t, string(want), string(raw))
-		}
-	}
-}
-
-func TestReconcile_MergedResourceTagCountIsDeferredToTransport(t *testing.T) {
-	cluster := buildReadyCluster("cluster-1", "4.15.0")
-	for i := range 50 {
-		cluster.Spec.Platform.GCP.ResourceTags = append(cluster.Spec.Platform.GCP.ResourceTags, privatev1.GCPResourceTag{Key: fmt.Sprintf("tag%d", i), Value: "v"})
-	}
-	tr := mock.New()
-	_, store := buildReconciler(t, cluster, nil, tr, nil)
-	r := hc.New(tr, testLogger(t), store, nil, []privatev1.GCPResourceTag{{Key: "extra", Value: "v"}}, "", "")
-	_, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-	require.NoError(t, err)
-	require.Len(t, tr.ApplyCalls, 1, "transport must select preserved tags before checking count")
-	var obj map[string]any
-	require.NoError(t, json.Unmarshal(tr.ApplyCalls[0].Manifests[3], &obj))
-	gcp := obj["spec"].(map[string]any)["platform"].(map[string]any)["gcp"].(map[string]any)
-	require.Len(t, gcp["resourceTags"], 51)
-}
-
-func TestReconcile_InvalidConfiguredResourceTags(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		tag     privatev1.GCPResourceTag
-		wantErr string
-	}{
-		{name: "other project parent", tag: privatev1.GCPResourceTag{Key: "env", Value: "prod", ParentID: ptr.To("other-project")}, wantErr: "parentID must be an organization ID or match the cluster GCP project ID"},
-		{name: "invalid key", tag: privatev1.GCPResourceTag{Key: "bad/key", Value: "prod"}, wantErr: "resource tag key"},
-		{name: "invalid value", tag: privatev1.GCPResourceTag{Key: "env", Value: strings.Repeat("a", 64)}, wantErr: "resource tag value"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cluster := buildReadyCluster("cluster-1", "4.15.0")
-			tr := mock.New()
-			_, store := buildReconciler(t, cluster, nil, tr, nil)
-			r := hc.New(tr, testLogger(t), store, nil, []privatev1.GCPResourceTag{tc.tag}, "", "")
-			_, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-			require.ErrorContains(t, err, tc.wantErr)
-			require.Empty(t, tr.ApplyCalls, "invalid merged tags must not reach Firestore")
-		})
-	}
-}
-
-func TestReconcile_ResourceTagsMismatchCondition(t *testing.T) {
-	for _, stale := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stale=%v", stale), func(t *testing.T) {
-			cluster := buildReadyCluster("cluster-abc", "4.15.0")
-			cluster.Status.Conditions = []metav1.Condition{{Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "PreviouslyApplied", LastTransitionTime: metav1.Now()}}
-			tr := mock.New()
-			feedback := &transport.Status{
-				ResourceTagsMismatch: ptr.To(true),
-				Stale:                stale,
-				ResourceStatuses: map[string]map[string]string{
-					transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters", fmt.Sprintf("clusters-%s", cluster.UID), privatev1.DefaultSafeName(cluster.Name, cluster.UID)): {"availableCondition": "True"},
-				},
-				Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AllResourcesApplied"}},
-			}
-			tr.StatusOverrides["mc-cluster-1/"+mustClusterGroupKey("hyperfleet", "cluster-abc")] = feedback
-			r, store := buildReconciler(t, cluster, nil, tr, nil)
-			for _, mismatch := range []bool{true, false} {
-				feedback.ResourceTagsMismatch = ptr.To(mismatch)
-				store.statusWriter.called = false
-				result, err := r.Reconcile(t.Context(), clusterReq("cluster-abc"))
-				require.NoError(t, err)
-				require.True(t, store.statusWriter.called)
-				updated := store.statusWriter.captured.(*privatev1.Cluster)
-				condition := meta.FindStatusCondition(updated.Status.Conditions, "ResourceTagsMismatch")
-				require.NotNil(t, condition)
-				require.Equal(t, updated.Generation, condition.ObservedGeneration)
-				if mismatch {
-					require.Equal(t, metav1.ConditionTrue, condition.Status)
-					require.Equal(t, "TagsPreserved", condition.Reason)
-				} else {
-					require.Equal(t, metav1.ConditionFalse, condition.Status)
-					require.Equal(t, "TagsMatch", condition.Reason)
-				}
-				if !stale {
-					require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, "ResourcesApplied"))
-					require.True(t, meta.IsStatusConditionTrue(updated.Status.Conditions, "HostedClusterAvailable"))
-					require.Equal(t, 5*time.Minute, result.RequeueAfter, "mismatch must not prevent steady-state reconciliation")
-				}
-				// Feed back the persisted status, then verify idempotency.
-				store.cluster = updated.DeepCopy()
-				store.statusWriter.called = false
-				_, err = r.Reconcile(t.Context(), clusterReq("cluster-abc"))
-				require.NoError(t, err)
-				require.False(t, store.statusWriter.called)
-			}
-		})
-	}
 }

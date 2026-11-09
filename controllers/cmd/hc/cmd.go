@@ -24,7 +24,6 @@ import (
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	var (
 		customerLabelsFile  string
-		resourceTagsFile    string
 		pullSecretStoreName string
 		pullSecretGCPKey    string
 	)
@@ -48,14 +47,6 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				}
 			}
 
-			var resourceTags []privatev1.GCPResourceTag
-			if resourceTagsFile != "" {
-				resourceTags, err = hc.LoadResourceTags(resourceTagsFile)
-				if err != nil {
-					return fmt.Errorf("load resource tags: %w", err)
-				}
-			}
-
 			t := fstransport.New(log)
 			defer t.Close()
 
@@ -68,7 +59,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("index nodepools by cluster ID: %w", err)
 			}
 
-			rec := hc.New(t, log, mgr.GetClient(), customerLabels, resourceTags, pullSecretStoreName, pullSecretGCPKey)
+			rec := hc.New(t, log, mgr.GetClient(), customerLabels, pullSecretStoreName, pullSecretGCPKey)
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -83,7 +74,6 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&resourceTagsFile, "resource-tags-file", "", "Path to JSON list of GCP Resource Manager tags merged with per-cluster tags (omit to disable)")
 	cmd.Flags().StringVar(&customerLabelsFile, "customer-labels-file", "", "Path to JSON file containing customer-facing GCP resource labels (omit to disable)")
 	cmd.Flags().StringVar(&pullSecretStoreName, "pull-secret-store-name", "gcp-secret-manager", "External Secrets ClusterSecretStore name for HostedCluster pull secret")
 	cmd.Flags().StringVar(&pullSecretGCPKey, "pull-secret-gcp-key", "default-openshift-pull-secret", "GCP Secret Manager key used for HostedCluster pull secret")

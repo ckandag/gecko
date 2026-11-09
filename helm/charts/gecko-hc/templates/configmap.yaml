@@ -1,19 +1,11 @@
-{{- $labels := .Values.customerLabels | default "{}" | mustFromJson | default dict }}
-{{- $tags := .Values.resourceTags | default "[]" | mustFromJson | default list }}
-{{- if or $labels $tags }}
+{{- if and .Values.customerLabels (ne .Values.customerLabels "{}") }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "gecko-hc.fullname" . }}-resource-config
+  name: {{ include "gecko-hc.fullname" . }}-customer-labels
   labels:
     {{- include "gecko-hc.labels" . | nindent 4 }}
 data:
-  {{- if $labels }}
   customer-labels.json: |
-    {{- $labels | toPrettyJson | nindent 4 }}
-  {{- end }}
-  {{- if $tags }}
-  resource-tags.json: |
-    {{- $tags | toPrettyJson | nindent 4 }}
-  {{- end }}
+    {{- .Values.customerLabels | mustFromJson | toPrettyJson | nindent 4 }}
 {{- end }}

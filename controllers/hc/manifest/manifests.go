@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-
-	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 )
 
 // Input holds all parameters needed to build the HC manifests.
@@ -35,14 +33,13 @@ type Input struct {
 	ReleaseImage                 string
 	ReleaseChannel               string
 	BaseDomain                   string
-	PullSecretStoreName          string                     // default: "gcp-secret-manager"
-	PullSecretGCPKey             string                     // default: "default-openshift-pull-secret"
-	ControllerAvailabilityPolicy string                     // default: "HighlyAvailable"
-	CPOImage                     string                     // optional — set CPO annotation if non-empty
-	CAPGImage                    string                     // optional — set CAPG annotation if non-empty
-	Slug                         string                     // default: "user" (username slug for DNS names)
-	ResourceLabels               map[string]string          // optional — sets spec.platform.gcp.resourceLabels on the HostedCluster CR
-	ResourceTags                 []privatev1.GCPResourceTag // optional — merged GCP Resource Manager tags
+	PullSecretStoreName          string            // default: "gcp-secret-manager"
+	PullSecretGCPKey             string            // default: "default-openshift-pull-secret"
+	ControllerAvailabilityPolicy string            // default: "HighlyAvailable"
+	CPOImage                     string            // optional — set CPO annotation if non-empty
+	CAPGImage                    string            // optional — set CAPG annotation if non-empty
+	Slug                         string            // default: "user" (username slug for DNS names)
+	ResourceLabels               map[string]string // optional — sets spec.platform.gcp.resourceLabels on the HostedCluster CR
 }
 
 // Build constructs raw JSON bytes for each manifest resource from the given input.
@@ -412,9 +409,6 @@ func buildGCPPlatform(input Input) map[string]any {
 				"network":         input.NetworkEmail,
 			},
 		},
-	}
-	if len(input.ResourceTags) > 0 {
-		gcp["resourceTags"] = input.ResourceTags
 	}
 	if len(input.ResourceLabels) > 0 {
 		keys := make([]string, 0, len(input.ResourceLabels))

@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
-	"github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 	"github.com/openshift-online/kube-applier-gcp/pkg/api/kubeapplier"
@@ -22,7 +21,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -102,22 +100,7 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	result, err := r.Reconcile(ctx, clusterReq(clusterID))
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Second, result.RequeueAfter)
-	require.True(t, storeClient.statusWriter.called)
-
-	// Tag comparison is known immediately from the specs transaction, even
-	// before kube-applier has provided any apply or availability feedback.
-	initialStatus, ok := storeClient.statusWriter.captured.(*privatev1.Cluster)
-	require.True(t, ok)
-	tagsMismatch := meta.FindStatusCondition(initialStatus.Status.Conditions, "ResourceTagsMismatch")
-	require.NotNil(t, tagsMismatch)
-	require.Equal(t, metav1.ConditionFalse, tagsMismatch.Status)
-	require.Equal(t, "TagsMatch", tagsMismatch.Reason)
-	require.Equal(t, cluster.Generation, tagsMismatch.ObservedGeneration)
-	for _, conditionType := range []string{"ResourcesApplied", "HostedClusterAvailable", "ApiCertificateReady"} {
-		require.Nil(t, meta.FindStatusCondition(initialStatus.Status.Conditions, conditionType),
-			"must not derive %s from stale feedback", conditionType)
-	}
-	require.Nil(t, initialStatus.Status.HostedClusterResult)
+	require.False(t, storeClient.statusWriter.called)
 
 	clusterNamespace := fmt.Sprintf("clusters-%s", clusterUID)
 	expected := []hcExpectedResource{
@@ -229,11 +212,6 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Model persistence of the first status write and ensure the next write
-	// really comes from fresh kube-applier feedback, not the previous call.
-	storeClient.cluster = initialStatus.DeepCopy()
-	storeClient.statusWriter.called = false
-	storeClient.statusWriter.captured = nil
 	result, err = r.Reconcile(ctx, clusterReq(clusterID))
 	require.NoError(t, err)
 	require.Equal(t, 5*time.Minute, result.RequeueAfter)
@@ -325,64 +303,4 @@ func TestIntegration_HC_DeletionWaitsForNodePools(t *testing.T) {
 	require.True(t, storeClient.updateCalled)
 	updated := storeClient.updated.(*privatev1.Cluster)
 	require.NotContains(t, updated.Finalizers, constants.FinalizerCluster)
-}
-
-// A new platform tag must not block unrelated updates to an existing 50-tag desire.
-func TestIntegration_HC_PreservesTagsWhenDesiredUnionExceedsLimit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	opts := hcEmulatorOpts(t)
-	project := fmt.Sprintf("gecko-hc-tag-limit-%d", time.Now().UnixNano())
-	specs, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, specs.Close()) })
-	cleanupHCCollections(t, specs)
-	transportClient := fstransport.New(testLogger(t), opts...)
-	defer transportClient.Close()
-	cluster := buildReadyCluster("cluster-tag-limit", "4.15.0")
-	cluster.Status.PlacementResult.ManagementClusterName = project
-	for i := range 49 {
-		cluster.Spec.Platform.GCP.ResourceTags = append(cluster.Spec.Platform.GCP.ResourceTags, privatev1.GCPResourceTag{Key: fmt.Sprintf("customer-%02d", i), Value: "v"})
-	}
-	_, store := buildReconciler(t, cluster, nil, transportClient, nil)
-	platformTags := []privatev1.GCPResourceTag{{Key: "platform-a", Value: "v"}}
-	r := hc.New(transportClient, testLogger(t), store, nil, platformTags, "", "")
-	_, err = r.Reconcile(ctx, clusterReq(cluster.Name))
-	require.NoError(t, err)
-	docID := desireid.NewDocumentID(mustClusterGroupKey(cluster.Namespace, cluster.Name), "hypershift.openshift.io", "v1beta1", "hostedclusters", fmt.Sprintf("clusters-%s", cluster.UID), cluster.Spec.SafeName)
-	doc := specs.Collection("applydesires").Doc(docID)
-	initial, err := doc.Get(ctx)
-	require.NoError(t, err)
-	originalTags, found, err := unstructured.NestedSlice(initial.Data(), "spec_kubeContent", "spec", "platform", "gcp", "resourceTags")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, originalTags, 50)
-
-	store.cluster = store.statusWriter.captured.(*privatev1.Cluster).DeepCopy()
-	newRelease := "quay.io/example/release:updated"
-	store.cluster.Status.VersionResolution.ReleaseImage = newRelease
-	platformTags = append(platformTags, privatev1.GCPResourceTag{Key: "platform-b", Value: "v"})
-	r = hc.New(transportClient, testLogger(t), store, nil, platformTags, "", "")
-	for range 2 {
-		store.statusWriter.called = false
-		_, err = r.Reconcile(ctx, clusterReq(cluster.Name))
-		require.NoError(t, err)
-		updated, err := doc.Get(ctx)
-		require.NoError(t, err)
-		tags, found, err := unstructured.NestedSlice(updated.Data(), "spec_kubeContent", "spec", "platform", "gcp", "resourceTags")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, originalTags, tags)
-		release, found, err := unstructured.NestedString(updated.Data(), "spec_kubeContent", "spec", "release", "image")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, newRelease, release, "unrelated updates must still be stored")
-		if store.statusWriter.called {
-			store.cluster = store.statusWriter.captured.(*privatev1.Cluster).DeepCopy()
-		}
-		mismatch := meta.FindStatusCondition(store.cluster.Status.Conditions, "ResourceTagsMismatch")
-		require.NotNil(t, mismatch)
-		require.Equal(t, metav1.ConditionTrue, mismatch.Status)
-		require.Equal(t, "TagsPreserved", mismatch.Reason)
-	}
 }

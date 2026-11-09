@@ -375,80 +375,6 @@ properties:
                 x-kubernetes-list-map-keys:
                 - key
                 x-kubernetes-list-type: map
-              resourceTags:
-                description: |-
-                  resourceTags selects pre-existing GCP Resource Manager tags to apply to
-                  supported GCP resources created for the cluster. Tags must already exist,
-                  and the cluster service accounts must have permission to use them.
-                  Each short key must be unique, even across different parents. When parentID
-                  is omitted, the cluster's GCP project is used. Tags can only be configured
-                  during cluster creation and cannot be added, removed, or changed later.
-                items:
-                  description: |-
-                    GCPResourceTag selects a pre-existing Google Cloud Resource Manager tag by
-                    its parent, short key, and short value. The tag must be defined in the
-                    cluster project or an organization before the cluster is created.
-                    See https://cloud.google.com/resource-manager/docs/tags/tags-overview.
-                  properties:
-                    key:
-                      description: |-
-                        key is required and is the short name of the pre-existing Resource Manager TagKey.
-                        A key is 1-63 characters, begins and ends with
-                        an ASCII alphanumeric character, and may contain letters, digits, '.',
-                        '_', or '-' between them.
-                      maxLength: 63
-                      minLength: 1
-                      type: string
-                      x-kubernetes-validations:
-                      - message: key must start and end with an ASCII letter or digit
-                          and contain only ASCII letters, digits, '.', '_' or '-'
-                        rule: self.matches('^[a-zA-Z0-9]([0-9A-Za-z_.-]{0,61}[a-zA-Z0-9])?$')
-                    parentID:
-                      description: |-
-                        parentID is the ID of the project or organization that defines the TagKey.
-                        When omitted, the cluster's GCP project is used.
-                        An explicit value must be the cluster's GCP project ID or a numeric
-                        organization ID. A numeric value is treated as an organization ID; project
-                        numbers are not supported.
-                        An organization ID consists of 1 to 32 decimal digits and must not start with 0.
-                        A project ID is 6 to 30 characters long, contains only lowercase letters, digits
-                        and hyphens, starts with a letter and must not end with a hyphen.
-                      maxLength: 32
-                      minLength: 1
-                      type: string
-                      x-kubernetes-validations:
-                      - message: parentID must be a numeric organization ID or a valid
-                          GCP project ID
-                        rule: self.matches('(^[1-9][0-9]{0,31}$)|(^[a-z][a-z0-9-]{4,28}[a-z0-9]$)')
-                    value:
-                      description: |-
-                        value is required and is the short name of the pre-existing Resource Manager TagValue for
-                        key. Exactly one value for a TagKey can be attached to a resource. A value
-                        is 1-63 characters, begins and ends with an ASCII alphanumeric character,
-                        and may contain ASCII letters and digits, `_-.@%=+:,*#&()[]{}`, and
-                        spaces between them.
-                      maxLength: 63
-                      minLength: 1
-                      type: string
-                      x-kubernetes-validations:
-                      - message: value must start and end with an ASCII letter or
-                          digit and contain only ASCII letters, digits, spaces or
-                          the characters _-.@%=+:,*#&()[]{}
-                        rule: self.matches('^[a-zA-Z0-9]([0-9A-Za-z_.@%=+:,*#&()\\[\\]{}\\-
-                          ]{0,61}[a-zA-Z0-9])?$')
-                  required:
-                  - key
-                  - value
-                  type: object
-                maxItems: 50
-                minItems: 1
-                type: array
-                x-kubernetes-list-type: atomic
-                x-kubernetes-validations:
-                - message: resourceTags are immutable
-                  rule: self == oldSelf
-                - message: resourceTags keys must be unique across all parents
-                  rule: self.all(t, self.exists_one(u, u.key == t.key))
               subnet:
                 description: subnet is the subnet name for Private Service Connect
                   endpoints.
@@ -678,15 +604,6 @@ properties:
             - subnet
             - workloadIdentity
             type: object
-            x-kubernetes-validations:
-            - fieldPath: .resourceTags
-              message: resourceTags may only be configured during cluster creation
-              rule: has(self.resourceTags) == has(oldSelf.resourceTags)
-            - fieldPath: .resourceTags
-              message: resourceTags parentID must be an organization ID or the cluster
-                GCP project ID
-              rule: '!has(self.resourceTags) || self.resourceTags.all(t, !has(t.parentID)
-                || t.parentID.matches(''^[1-9][0-9]{0,31}$'') || t.parentID == self.projectID)'
           type:
             description: type specifies the infrastructure provider. Must be "GCP".
             enum:

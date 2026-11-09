@@ -152,41 +152,6 @@ Implementations:
 - **Firestore** (`client/transport/firestore/`) — production implementation using paired Firestore databases per MC
 - **Mock** (`client/transport/mock/`) — in-memory implementation for unit tests
 
-## Troubleshooting
-
-### HostedCluster resource tags were overwritten in Firestore
-
-If a Gecko Cluster reports `ResourcesApplied=False` with reason `ApplyFailed`,
-check the corresponding kube-applier error. An error such as `resourceTags are
-immutable` can mean an older controller overwrote the desired tags in Firestore
-without successfully changing the live HostedCluster. The current controller
-preserves tags from the existing desire, so changing configuration alone cannot
-repair that previously overwritten list.
-
-After deploying the tag-preserving controller and ensuring older controller
-instances no longer write desires, repair the affected entry manually:
-
-1. Read `spec.platform.gcp.resourceTags` from the live HostedCluster in its
-   management cluster. This is the authoritative list for this repair.
-2. In that management cluster's Firestore project, open the `specs` database and
-   `applydesires` collection. Identify the HostedCluster document using
-   `spec.groupKey` and `spec.targetItem` (resource, namespace, and name), and back
-   up the document before editing.
-3. Update **only** `spec_kubeContent.spec.platform.gcp.resourceTags` to match the
-   live list exactly, including order, optional fields, and string values. If the
-   live field is absent, remove only that field from the desire. Do not change
-   live immutable tags, delete/recreate the document, or edit the `status`
-   database. Use a field-scoped edit rather than replacing the entire document.
-4. Allow reconciliation to run and verify `ResourcesApplied=True` on the Gecko
-   Cluster and that kube-applier no longer reports the immutable-tag error.
-   Investigate any remaining apply failures separately.
-
-If configuration still differs from the restored tags, the Gecko Cluster reports
-`ResourceTagsMismatch=True` with reason `TagsPreserved`; this is informational
-and does not block reconciliation. Matching configuration clears the condition
-with reason `TagsMatch`. A configuration mismatch against a correctly preserved
-desire does **not** require this repair.
-
 ## Key Design Patterns
 
 ### Desire Documents
