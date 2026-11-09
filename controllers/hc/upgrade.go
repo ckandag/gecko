@@ -13,7 +13,7 @@ import (
 )
 
 func (r *Reconciler) preparationFailure(ctx context.Context, c *privatev1.Cluster, cause error) error {
-	if meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) && !privatev1.ClusterUpgradeSubmissionStarted(c) {
+	if privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) && !privatev1.ClusterUpgradeSubmissionStarted(c) {
 		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 			Type: "ResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed",
 			Message: "The desired resources could not be prepared before dispatch", ObservedGeneration: c.Generation,
@@ -28,7 +28,7 @@ func (r *Reconciler) preparationFailure(ctx context.Context, c *privatev1.Cluste
 // applyResources records the dispatch boundary before any external write. An
 // uncertain dispatch keeps the approval lock across errors and restarts.
 func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
-	upgrading := meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) &&
+	upgrading := privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) &&
 		c.Status.HostedClusterResult != nil && c.Spec.Release.Version != c.Status.HostedClusterResult.Version
 	if !upgrading {
 		return r.transport.Apply(ctx, managementCluster, groupKey, manifests)

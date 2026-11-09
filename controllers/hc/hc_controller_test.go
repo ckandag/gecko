@@ -1497,3 +1497,20 @@ func TestReconcile_ApprovedUpgradePersistsDispatchBoundaryBeforeApply(t *testing
 		})
 	}
 }
+
+func TestReconcile_AutomaticPreparationDoesNotDispatchTarget(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.23.8")
+	cluster.Spec.Release.Version = "4.23.9"
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.23.8", DesiredVersion: "4.23.8"}
+	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: "automatic"}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, Reason: privatev1.ControlPlaneUpgradePreparingReason, ObservedGeneration: cluster.Generation})
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "continue maintaining the observed release during preparation")
+	for _, manifest := range tr.ApplyCalls[0].Manifests {
+		require.NotContains(t, string(manifest), "4.23.9")
+	}
+	require.Nil(t, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted), "maintaining the old release must not mark the new target as dispatched")
+}

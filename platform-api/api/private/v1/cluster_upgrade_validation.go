@@ -13,6 +13,12 @@ import (
 const (
 	ControlPlaneUpgradeAccepted  = "ControlPlaneUpgradeAccepted"
 	ControlPlaneUpgradeSubmitted = "ControlPlaneUpgradeSubmitted"
+	// ControlPlaneUpgradePreparingReason reserves an automatic target before
+	// normalizing spec. Installers must wait for the final approval condition.
+	ControlPlaneUpgradePreparingReason = "PreparingAutomaticUpgrade"
+	// ControlPlaneUpgradeCancelingReason keeps an unsubmitted automatic target
+	// locked until its spec is restored to the observed release.
+	ControlPlaneUpgradeCancelingReason = "CancelingAutomaticUpgrade"
 )
 
 var minorReleasePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -60,9 +66,30 @@ func ClusterReleaseApproved(cluster *Cluster) bool {
 	if cluster.Spec.Release.Version == hc.Version {
 		return true
 	}
+	if ClusterAutomaticReleasePreparing(cluster) || ClusterAutomaticReleaseCanceling(cluster) {
+		return false
+	}
 	result := cluster.Status.ControlPlaneUpgrade
 	return meta.IsStatusConditionTrue(cluster.Status.Conditions, ControlPlaneUpgradeAccepted) &&
 		result != nil && result.TargetVersion == cluster.Spec.Release.Version
+}
+
+// ClusterAutomaticReleasePreparing identifies the durable automatic approval
+// receipt. It also protects the write of that exact target into release spec.
+func ClusterAutomaticReleasePreparing(cluster *Cluster) bool {
+	return automaticReleasePhase(cluster, ControlPlaneUpgradePreparingReason)
+}
+
+// ClusterAutomaticReleaseCanceling identifies confirmed pre-dispatch cleanup.
+func ClusterAutomaticReleaseCanceling(cluster *Cluster) bool {
+	return automaticReleasePhase(cluster, ControlPlaneUpgradeCancelingReason)
+}
+
+func automaticReleasePhase(cluster *Cluster, reason string) bool {
+	accepted := meta.FindStatusCondition(cluster.Status.Conditions, ControlPlaneUpgradeAccepted)
+	result := cluster.Status.ControlPlaneUpgrade
+	return accepted != nil && accepted.Status == "True" && accepted.Reason == reason &&
+		result != nil && result.TargetSource == "automatic" && result.TargetVersion != ""
 }
 
 // ClusterInstallationVersion keeps pending customer intent out of manifests.
@@ -106,6 +133,22 @@ func ClusterUpgradeSubmissionStarted(cluster *Cluster) bool {
 func (c *Cluster) validateReleaseUpdate(old *Cluster) error {
 	if equality.Semantic.DeepEqual(c.Spec.Release, old.Spec.Release) {
 		return nil
+	}
+	// This only copies the already approved target into spec. It cannot change
+	// the target or channel, and does not grant installation approval by itself.
+	if ClusterAutomaticReleasePreparing(old) {
+		normalized := old.Spec.Release
+		normalized.Version = old.Status.ControlPlaneUpgrade.TargetVersion
+		if equality.Semantic.DeepEqual(c.Spec.Release, normalized) {
+			return nil
+		}
+	}
+	if ClusterAutomaticReleaseCanceling(old) && !ClusterUpgradeSubmissionStarted(old) && old.Status.HostedClusterResult != nil {
+		restored := old.Spec.Release
+		restored.Version = old.Status.HostedClusterResult.Version
+		if equality.Semantic.DeepEqual(c.Spec.Release, restored) {
+			return nil
+		}
 	}
 	if ClusterUpgradeActive(old) {
 		return fmt.Errorf("spec.release cannot be changed while a control-plane upgrade is active")

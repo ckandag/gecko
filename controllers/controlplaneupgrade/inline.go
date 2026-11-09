@@ -64,34 +64,28 @@ func (r *Reconciler) normalizeMinor(ctx context.Context, c *privatev1.Cluster) (
 	return reconcile.Result{RequeueAfter: requeueConflict}, nil
 }
 
-// stageAutomaticUpgrade records the source before spec changes. A restart after
-// either write must never reinterpret an automatic target as a manual bypass.
-func (r *Reconciler) stageAutomaticUpgrade(ctx context.Context, c *privatev1.Cluster, previous *privatev1.ControlPlaneUpgradeResult, target string) (reconcile.Result, error) {
-	result := recordActiveTarget(previous, target)
-	result.TargetSource = targetSourceAutomatic
-	reason, message := "UpdateSelected", "An automatic release has been selected"
-	if override, overrideReason, overrideMessage := overrideCondition(c, target, c.Status.HostedClusterResult.Version); override {
-		reason, message = overrideReason, overrideMessage
-	}
-	statusResult, err := r.writeStatus(ctx, c, result, requeuePending,
-		newCondition(conditionAvailable, metav1.ConditionTrue, reason, message),
-		newCondition(conditionProgressing, metav1.ConditionFalse, "WaitingForApproval", "The automatic release has not been approved"),
-		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
-	if err != nil || statusResult.RequeueAfter == requeueConflict {
-		return statusResult, err
-	}
-	c.Spec.Release.Version = target
-	if err := r.apiClient.Update(ctx, c); err != nil {
-		if apierrors.IsConflict(err) {
-			return reconcile.Result{RequeueAfter: requeueConflict}, nil
+// finishAutomaticPreparation copies only the durably approved automatic target
+// into spec. A second status write binds installation approval to the normalized
+// generation. A crash or conflict between either write keeps installers gated.
+func (r *Reconciler) finishAutomaticPreparation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
+	result := c.Status.ControlPlaneUpgrade
+	if c.Spec.Release.Version != result.TargetVersion {
+		c.Spec.Release.Version = result.TargetVersion
+		if err := r.apiClient.Update(ctx, c); err != nil {
+			if apierrors.IsConflict(err) {
+				return reconcile.Result{RequeueAfter: requeueConflict}, nil
+			}
+			return reconcile.Result{}, fmt.Errorf("normalize approved automatic release: %w", err)
 		}
-		return reconcile.Result{}, fmt.Errorf("persist automatic release intent: %w", err)
 	}
-	return reconcile.Result{RequeueAfter: requeueConflict}, nil
+	return r.writeStatus(ctx, c, result, requeueObserving,
+		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, "UpgradeAccepted", "The automatic release is approved for rollout"),
+		newCondition(conditionAvailable, metav1.ConditionFalse, "UpgradeInProgress", "The automatic release is approved for rollout"),
+		newCondition(conditionProgressing, metav1.ConditionTrue, "UpgradeAccepted", "Waiting for the HostedCluster to apply the approved release"),
+		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 }
 
-func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, source string) (reconcile.Result, error) {
-	target := c.Spec.Release.Version
+func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, target, source string) (reconcile.Result, error) {
 	if err := privatev1.ValidateClusterUpgradeTarget(c, target); err != nil {
 		return r.block(ctx, c, "TargetNotAvailable", err.Error(), true)
 	}
@@ -128,12 +122,25 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, s
 		}
 	}
 	result := recordActiveTarget(c.Status.ControlPlaneUpgrade, target)
+	if result.TargetSource != source || result.CompletedTime != nil {
+		now := metav1.NewTime(r.now())
+		result.RequestedTime = &now
+		result.CompletedTime = nil
+	}
 	result.TargetSource = source
-	// Persist approval and its exact target in one optimistic status write.
-	return r.writeStatus(ctx, c, result, requeueObserving,
-		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, "UpgradeAccepted", "The desired release is approved for rollout"),
-		newCondition(conditionAvailable, metav1.ConditionFalse, "UpgradeInProgress", "The desired release is approved for rollout"),
-		newCondition(conditionProgressing, metav1.ConditionTrue, "UpgradeAccepted", "Waiting for the HostedCluster to apply the approved release"),
+	availableMessage := "The desired release is approved for rollout"
+	reason, availableReason, availableStatus, retry := "UpgradeAccepted", "UpgradeInProgress", metav1.ConditionFalse, requeueObserving
+	if source == targetSourceAutomatic {
+		reason, availableReason, availableStatus, retry = privatev1.ControlPlaneUpgradePreparingReason, "UpdateSelected", metav1.ConditionTrue, requeueConflict
+		if override, overrideReason, overrideMessage := overrideCondition(c, target, c.Status.HostedClusterResult.Version); override {
+			availableReason, availableMessage = overrideReason, overrideMessage
+		}
+	}
+	// Persist approval and its exact source/target in one optimistic status write.
+	return r.writeStatus(ctx, c, result, retry,
+		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, reason, "The desired release is approved for rollout"),
+		newCondition(conditionAvailable, availableStatus, availableReason, availableMessage),
+		newCondition(conditionProgressing, metav1.ConditionTrue, reason, "Waiting for the HostedCluster to apply the approved release"),
 		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 }
 
@@ -172,6 +179,9 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 			condition := meta.FindStatusCondition(c.Status.Conditions, typ)
 			if condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation &&
 				(typ == "VersionResolved" || condition.Reason == "ManifestBuildFailed") {
+				if result.TargetSource == targetSourceAutomatic {
+					return r.cancelAutomaticPreparation(ctx, c)
+				}
 				return r.block(ctx, c, "PreparationFailed", "The release could not be prepared before dispatch; release settings can be corrected", true)
 			}
 		}
@@ -198,7 +208,7 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 }
 
 // observeExisting adopts a rollout already present in HyperShift feedback. It
-// records the lock and dispatch boundary together before normal observation.
+// records the lock; HostedCluster feedback is evidence of existing dispatch.
 func (r *Reconciler) observeExisting(ctx context.Context, c *privatev1.Cluster, target string) (reconcile.Result, error) {
 	result := recordActiveTarget(c.Status.ControlPlaneUpgrade, target)
 	progressing, degraded := metav1.ConditionTrue, metav1.ConditionFalse
@@ -234,4 +244,37 @@ func (r *Reconciler) eligibleUpdates(ctx context.Context, c *privatev1.Cluster) 
 		eligible = append(eligible, candidate)
 	}
 	return eligible, nil
+}
+
+// cancelAutomaticPreparation keeps ownership until the unsubmitted automatic
+// target is removed from spec. Otherwise an unrelated spec repair could make a
+// later retry look like a new customer request and bypass maintenance.
+func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
+	result := c.Status.ControlPlaneUpgrade.DeepCopy()
+	result.FailureReason = "PreparationFailed"
+	result.FailureMessage = "The automatic release could not be prepared before dispatch"
+	return r.writeStatus(ctx, c, result, requeueConflict,
+		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradeCancelingReason, "Restoring the observed release before unlocking automatic intent"),
+		newCondition(conditionProgressing, metav1.ConditionFalse, "PreparationFailed", result.FailureMessage),
+		newCondition(conditionDegraded, metav1.ConditionTrue, "PreparationFailed", result.FailureMessage))
+}
+
+func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
+	hc := c.Status.HostedClusterResult
+	if privatev1.ClusterUpgradeSubmissionStarted(c) || hc.Version == c.Status.ControlPlaneUpgrade.TargetVersion {
+		// Dispatch evidence wins over a stale preparation failure. Restore the
+		// original approved target rather than attempting any rollback.
+		return r.writeStatus(ctx, c, c.Status.ControlPlaneUpgrade, requeueConflict,
+			newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradePreparingReason, "Dispatch evidence requires continuing the approved automatic release"))
+	}
+	if c.Spec.Release.Version != hc.Version {
+		c.Spec.Release.Version = hc.Version
+		if err := r.apiClient.Update(ctx, c); err != nil {
+			if apierrors.IsConflict(err) {
+				return reconcile.Result{RequeueAfter: requeueConflict}, nil
+			}
+			return reconcile.Result{}, fmt.Errorf("restore unsubmitted automatic release: %w", err)
+		}
+	}
+	return r.block(ctx, c, "PreparationFailed", "The unsubmitted automatic upgrade failed; release settings can be corrected", true)
 }

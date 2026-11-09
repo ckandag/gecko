@@ -75,6 +75,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	completed, desired := hc.Version, hc.DesiredVersion
 	if meta.IsStatusConditionTrue(cluster.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) {
+		if privatev1.ClusterAutomaticReleasePreparing(&cluster) {
+			return r.finishAutomaticPreparation(ctx, &cluster)
+		}
+		if privatev1.ClusterAutomaticReleaseCanceling(&cluster) {
+			return r.finishAutomaticCancellation(ctx, &cluster)
+		}
 		return r.observeUpgrade(ctx, &cluster)
 	}
 	// Existing HyperShift rollouts are observed, never replaced by new intent.
@@ -93,11 +99,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.normalizeMinor(ctx, &cluster)
 	}
 	if cluster.Spec.Release.Version != completed {
-		source := targetSourceCustomer
-		if result != nil && result.TargetVersion == cluster.Spec.Release.Version && result.TargetSource == targetSourceAutomatic && result.CompletedTime == nil {
-			source = targetSourceAutomatic
-		}
-		return r.approveUpgrade(ctx, &cluster, source)
+		// Only automation may create its approval receipt before changing spec.
+		// A customer version change never inherits an old automatic selection.
+		return r.approveUpgrade(ctx, &cluster, cluster.Spec.Release.Version, targetSourceCustomer)
 	}
 	return r.reconcileAutomatic(ctx, &cluster, result)
 }
@@ -214,9 +218,9 @@ func (r *Reconciler) reconcileAutomatic(ctx context.Context, cluster *privatev1.
 		}
 	}
 
-	// Persist concrete intent before the approval/capacity gate. Application
-	// remains blocked until approveUpgrade records acceptance.
-	return r.stageAutomaticUpgrade(ctx, cluster, result, candidate)
+	// Automatic intent is approved before spec changes, so its source survives
+	// restarts without being inferred from a matching historical target.
+	return r.approveUpgrade(ctx, cluster, candidate, targetSourceAutomatic)
 }
 
 func (r *Reconciler) writeMaintenanceBlocked(
