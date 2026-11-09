@@ -1,9 +1,8 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
-
-	jsonpatch "github.com/evanphx/json-patch/v5"
 
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -13,7 +12,7 @@ func (h *ConvertingResourceHandler) convertPublicInputToPrivate(publicObj, exist
 	if err != nil {
 		return nil, err
 	}
-	return h.applyPublicSpecClears(privateObj, public, oldPublic)
+	return h.applyPublicSpecClears(privateObj, existing, public, oldPublic)
 }
 
 // applyPublicSpecClears restores explicit nulls lost when an omitempty public
@@ -21,23 +20,44 @@ func (h *ConvertingResourceHandler) convertPublicInputToPrivate(publicObj, exist
 // oldPublic is nil for PUT; PATCH supplies the stored public representation from
 // before the patch, so removed public fields can be identified. Only public spec
 // fields contribute deletions; private fields and controller status are preserved.
-// PUT omissions retain their existing preservation semantics.
-func (h *ConvertingResourceHandler) applyPublicSpecClears(obj runtime.Object, public, oldPublic map[string]interface{}) (runtime.Object, error) {
+// Deleting a public object retains any private descendants from existing, even if
+// conversion already replaced that object with nil. PUT omissions retain their
+// existing preservation semantics.
+func (h *ConvertingResourceHandler) applyPublicSpecClears(obj, existing runtime.Object, public, oldPublic map[string]interface{}) (runtime.Object, error) {
 	spec, _ := public["spec"].(map[string]interface{})
 	oldSpec, _ := oldPublic["spec"].(map[string]interface{})
 	clears := publicFieldClears(spec, oldSpec)
 	if len(clears) == 0 {
 		return obj, nil
 	}
-	patch, err := json.Marshal(map[string]interface{}{"spec": clears})
+	// Compare the stored private object with its public projection to identify
+	// private descendants. The projection must come from existing, not the new
+	// public input, which may have removed their parent object altogether.
+	existingPublic, err := h.converter.PrivateToPublic(existing)
 	if err != nil {
 		return nil, err
 	}
-	original, err := json.Marshal(obj)
+	privateMap, err := specClearObjectMap(existing)
 	if err != nil {
 		return nil, err
 	}
-	merged, err := jsonpatch.MergePatch(original, patch)
+	publicMap, err := specClearObjectMap(existingPublic)
+	if err != nil {
+		return nil, err
+	}
+	objectMap, err := specClearObjectMap(obj)
+	if err != nil {
+		return nil, err
+	}
+	privateSpec, _ := privateMap["spec"].(map[string]interface{})
+	publicSpec, _ := publicMap["spec"].(map[string]interface{})
+	objectSpec, _ := objectMap["spec"].(map[string]interface{})
+	if objectSpec == nil {
+		objectSpec = make(map[string]interface{})
+		objectMap["spec"] = objectSpec
+	}
+	applyPublicFieldClears(objectSpec, clears, privateSpec, publicSpec)
+	merged, err := json.Marshal(objectMap)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +71,67 @@ func (h *ConvertingResourceHandler) applyPublicSpecClears(obj runtime.Object, pu
 		return nil, err
 	}
 	return result, nil
+}
+
+func specClearObjectMap(obj runtime.Object) (map[string]interface{}, error) {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber() // Retained private descendants must keep exact integers.
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// applyPublicFieldClears narrows whole-object deletions to public members
+// wherever the stored object also contains private state.
+func applyPublicFieldClears(object, clears, private, public map[string]interface{}) {
+	for key, value := range clears {
+		if value == nil {
+			if retained := privateObjectFields(private[key], public[key]); len(retained) > 0 {
+				object[key] = retained
+			} else {
+				delete(object, key)
+			}
+			continue
+		}
+		if child, ok := value.(map[string]interface{}); ok {
+			objectChild, _ := object[key].(map[string]interface{})
+			privateChild, _ := private[key].(map[string]interface{})
+			publicChild, _ := public[key].(map[string]interface{})
+			if objectChild == nil {
+				objectChild = make(map[string]interface{})
+				object[key] = objectChild
+			}
+			applyPublicFieldClears(objectChild, child, privateChild, publicChild)
+		}
+	}
+}
+
+// privateObjectFields keeps only members absent from the stored object's public
+// projection, including private descendants of otherwise public child objects.
+func privateObjectFields(private, public interface{}) map[string]interface{} {
+	privateObject, privateOK := private.(map[string]interface{})
+	publicObject, publicOK := public.(map[string]interface{})
+	if !privateOK || !publicOK {
+		return nil
+	}
+	retained := make(map[string]interface{})
+	for key, value := range privateObject {
+		publicValue, found := publicObject[key]
+		if !found {
+			retained[key] = value
+			continue
+		}
+		if child := privateObjectFields(value, publicValue); len(child) > 0 {
+			retained[key] = child
+		}
+	}
+	return retained
 }
 
 // publicFieldClears collects explicit nulls and keys removed from public object

@@ -217,6 +217,89 @@ func TestClusterMaintenancePublicAPIValidation(t *testing.T) {
 	assertStoredMaintenanceClusterUnchanged(t, store, &afterPatch)
 }
 
+func TestClusterMaintenancePublicPatchPreservesPrivateUpgradePin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		critical    string
+		privateOnly bool
+	}{
+		{name: "public settings and private pin", critical: "4.22.21"},
+		{name: "private pin only", critical: "4.22.21", privateOnly: true},
+		{name: "no private pin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			privateScheme, publicScheme := runtime.NewScheme(), runtime.NewScheme()
+			if err := privatev1.AddToScheme(privateScheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := publicv1.AddToScheme(publicScheme); err != nil {
+				t.Fatal(err)
+			}
+			converter := conversion.NewConverter(publicScheme, privateScheme, "")
+			publicCluster := clusterForMaintenanceAPITest()
+			converted, err := converter.PublicToPrivate(&publicCluster, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := converted.(*privatev1.Cluster)
+			original.Spec.Maintenance.CriticalUpgrade = tc.critical
+			if tc.privateOnly {
+				original.Spec.Maintenance.Window = nil
+				original.Spec.Maintenance.Exclusions = nil
+			}
+			if err := original.Default(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			gvk := privatev1.GroupVersion.WithKind("Cluster")
+			store := memory.NewMemoryStore("clusters", privateScheme, gvk)
+			if err := store.Create(t.Context(), original); err != nil {
+				t.Fatal(err)
+			}
+			handler := handlers.NewConvertingResourceHandler(store, maintenanceClusterSchemaProcessor(t, publicv1.ClusterSchemaYAML),
+				converter, gvk, "clusters", publicScheme, privateScheme, nil, logr.Discard())
+			router := chi.NewRouter()
+			router.Patch("/apis/gcp.managed.openshift.io/v1/namespaces/{namespace}/clusters/{name}", handler.Patch)
+			var generation int64
+			for attempt := range 2 {
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPatch,
+					"/apis/gcp.managed.openshift.io/v1/namespaces/customer/clusters/test-cluster",
+					strings.NewReader(`{"spec":{"maintenance":null}}`))
+				req.Header.Set("Content-Type", "application/merge-patch+json")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				if response.Code != http.StatusOK {
+					t.Fatalf("clearing maintenance returned %d: %s", response.Code, response.Body.String())
+				}
+				persisted, err := store.Get(t.Context(), original.Namespace, original.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				updated := persisted.(*privatev1.Cluster)
+				if tc.critical == "" {
+					if updated.Spec.Maintenance != nil {
+						t.Fatal("maintenance without private state was not removed")
+					}
+				} else if updated.Spec.Maintenance == nil || updated.Spec.Maintenance.CriticalUpgrade != tc.critical {
+					t.Fatal("clearing public maintenance removed the private upgrade pin")
+				}
+				if m := updated.Spec.Maintenance; m != nil && (m.Window != nil || m.Exclusions != nil) {
+					t.Fatal("clearing maintenance preserved public settings")
+				}
+				if updated.Spec.Release != original.Spec.Release || updated.Spec.SafeName != original.Spec.SafeName {
+					t.Fatal("clearing maintenance changed unrelated spec fields")
+				}
+				if strings.Contains(response.Body.String(), "criticalUpgrade") {
+					t.Fatal("private upgrade pin leaked into the public response")
+				}
+				if attempt > 0 && updated.Generation != generation {
+					t.Fatal("repeated maintenance clearing was not idempotent")
+				}
+				generation = updated.Generation
+			}
+		})
+	}
+}
+
 func assertStoredMaintenanceClusterUnchanged(t *testing.T, store *memory.MemoryStore, expected *publicv1.Cluster) *privatev1.Cluster {
 	t.Helper()
 	persisted, err := store.Get(t.Context(), expected.Namespace, expected.Name)

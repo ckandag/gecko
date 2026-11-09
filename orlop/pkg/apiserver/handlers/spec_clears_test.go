@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
@@ -27,7 +28,12 @@ func TestPublicSpecClearsPreserveOtherFields(t *testing.T) {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	h := &ConvertingResourceHandler{privateScheme: scheme, gvk: corev1.SchemeGroupVersion.WithKind("Pod")}
+	publicScheme := runtime.NewScheme()
+	gvk := corev1.SchemeGroupVersion.WithKind("Pod")
+	publicScheme.AddKnownTypeWithName(gvk, &specClearPublicPod{})
+	h := &ConvertingResourceHandler{
+		privateScheme: scheme, gvk: gvk, converter: conversion.NewConverter(publicScheme, scheme, ""),
+	}
 	tests := []struct {
 		name          string
 		current       map[string]interface{}
@@ -58,12 +64,12 @@ func TestPublicSpecClearsPreserveOtherFields(t *testing.T) {
 			// The original contains fields unavailable in the public representation.
 			// An integer beyond float64's exact range also must survive the round trip.
 			const preciseInteger = int64(1<<53 + 1)
-			original := &corev1.Pod{Spec: corev1.PodSpec{
+			original := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, Spec: corev1.PodSpec{
 				Affinity:              &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{}},
 				NodeSelector:          map[string]string{"keep": "value", "remove": "value", "private": "hidden"},
 				ActiveDeadlineSeconds: ptr.To(preciseInteger),
 			}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
-			result, err := h.applyPublicSpecClears(original, map[string]interface{}{"spec": tt.current}, map[string]interface{}{"spec": tt.previous})
+			result, err := h.applyPublicSpecClears(original, original, map[string]interface{}{"spec": tt.current}, map[string]interface{}{"spec": tt.previous})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,8 +98,11 @@ type specClearPublicPod struct {
 	Spec              specClearPublicPodSpec `json:"spec"`
 }
 type specClearPublicPodSpec struct {
-	Affinity     *corev1.Affinity  `json:"affinity,omitempty"`
-	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	Affinity     *specClearPublicAffinity `json:"affinity,omitempty"`
+	NodeSelector map[string]string        `json:"nodeSelector,omitempty"`
+}
+type specClearPublicAffinity struct {
+	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
 }
 
 func (p *specClearPublicPod) DeepCopyObject() runtime.Object {
@@ -102,7 +111,9 @@ func (p *specClearPublicPod) DeepCopyObject() runtime.Object {
 	}
 	out := *p
 	p.DeepCopyInto(&out.ObjectMeta)
-	out.Spec.Affinity = p.Spec.Affinity.DeepCopy()
+	if p.Spec.Affinity != nil {
+		out.Spec.Affinity = &specClearPublicAffinity{NodeAffinity: p.Spec.Affinity.NodeAffinity.DeepCopy()}
+	}
 	out.Spec.NodeSelector = maps.Clone(p.Spec.NodeSelector)
 	return &out
 }
@@ -130,6 +141,7 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 	tests := []struct {
 		name, method, body                             string
 		clearAffinity, clearNodeAffinity, removeMapKey bool
+		privateAffinity                                bool
 	}{
 		{name: "PATCH removes optional object", method: http.MethodPatch, body: `{"spec":{"affinity":null}}`, clearAffinity: true},
 		{name: "PATCH removes nested object", method: http.MethodPatch, body: `{"spec":{"affinity":{"nodeAffinity":null}}}`, clearNodeAffinity: true},
@@ -137,6 +149,8 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 		{name: "PATCH omission preserves object", method: http.MethodPatch, body: `{"spec":{"nodeSelector":{"keep":"value"}}}`},
 		{name: "PUT omission preserves object", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"nodeSelector":{"keep":"value","remove":"value"}}}`},
 		{name: "PUT explicit nullable object is cleared", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"affinity":null,"nodeSelector":{"keep":"value","remove":"value"}}}`, clearAffinity: true},
+		{name: "PATCH preserves private descendants of removed object", method: http.MethodPatch, body: `{"spec":{"affinity":null}}`, clearNodeAffinity: true, privateAffinity: true},
+		{name: "PUT preserves private descendants of null object", method: http.MethodPut, body: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"test-pod","namespace":"default"},"spec":{"affinity":null,"nodeSelector":{"keep":"value","remove":"value"}}}`, clearNodeAffinity: true, privateAffinity: true},
 		{name: "private field and status cannot be cleared", method: http.MethodPatch, body: `{"spec":{"activeDeadlineSeconds":null},"status":{"phase":"Failed"}}`},
 	}
 	for _, tt := range tests {
@@ -154,6 +168,11 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "default", Generation: 1},
 				Spec:       corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{}}, NodeSelector: map[string]string{"keep": "value", "remove": "value"}, ActiveDeadlineSeconds: ptr.To(preciseInteger)},
 				Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+			}
+			if tt.privateAffinity {
+				original.Spec.Affinity.PodAntiAffinity = &corev1.PodAntiAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{TopologyKey: "private-topology"}},
+				}
 			}
 			if err := store.Create(t.Context(), original); err != nil {
 				t.Fatal(err)
@@ -188,6 +207,9 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 			}
 			if updated.Spec.Affinity != nil && (updated.Spec.Affinity.NodeAffinity == nil) != tt.clearNodeAffinity {
 				t.Fatal("nested object deletion was not preserved")
+			}
+			if tt.privateAffinity && (updated.Spec.Affinity == nil || !apiequality.Semantic.DeepEqual(updated.Spec.Affinity.PodAntiAffinity, original.Spec.Affinity.PodAntiAffinity)) {
+				t.Fatal("clearing the public object changed its private descendants")
 			}
 			_, hasRemoved := updated.Spec.NodeSelector["remove"]
 			if hasRemoved == tt.removeMapKey {
