@@ -1,0 +1,72 @@
+{{- if .Values.enabled }}
+{{- $name := include "gecko-replication.fullname" . -}}
+{{- $gsa := include "gecko-replication.gcpServiceAccount" . -}}
+{{- if .Values.pubsub.topicOwner }}
+---
+# One designated release owns both shared topics when chart ownership is enabled.
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: {{ $name }}-data-topic
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.topicProjectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.dataTopic | quote }}
+---
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: {{ $name }}-control-topic
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.topicProjectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.controlTopic | quote }}
+{{- end }}
+---
+# The leader reads resync requests from a subscription in its regional project.
+# Config Connector needs pubsub.topics.attachSubscription on the shared control
+# topic; Terraform grants it outside this chart.
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubSubscription
+metadata:
+  name: {{ $name }}-control-subscription
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.subscriptionProjectId | quote }}
+spec:
+  resourceID: {{ .Values.pubsub.controlSubscription | quote }}
+  expirationPolicy:
+    ttl: ""
+  topicRef:
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.controlTopic | quote }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-control-subscriber
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.subscriptionProjectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.subscriber
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubSubscription
+    external: {{ printf "projects/%s/subscriptions/%s" .Values.pubsub.subscriptionProjectId .Values.pubsub.controlSubscription | quote }}
+{{- if .Values.pubsub.manageTopicIAM }}
+---
+# Only the leader publishes replicated resource events to the shared data topic.
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ $name }}-data-publisher
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.pubsub.topicProjectId | quote }}
+spec:
+  member: {{ printf "serviceAccount:%s" $gsa | quote }}
+  role: roles/pubsub.publisher
+  resourceRef:
+    apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+    kind: PubSubTopic
+    external: {{ printf "projects/%s/topics/%s" .Values.pubsub.topicProjectId .Values.pubsub.dataTopic | quote }}
+{{- end }}
+{{- end }}
