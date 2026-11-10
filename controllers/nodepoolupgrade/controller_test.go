@@ -36,7 +36,7 @@ func testObjects() (*privatev1.NodePool, *privatev1.Cluster, *privatev1.Version)
 	pool := &privatev1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: testPool, Namespace: testNamespace, Generation: 1},
 		Spec: privatev1.NodePoolSpec{ClusterID: testCluster,
-			Release: privatev1.ReleaseSpec{Version: "4.22.16", ChannelGroup: "stable"},
+			Release: privatev1.NodePoolReleaseSpec{Version: "4.22.16", ChannelGroup: "stable"},
 		},
 		Status: privatev1.NodePoolStatus{Version: "4.22.14"},
 	}

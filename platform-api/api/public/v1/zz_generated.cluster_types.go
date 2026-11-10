@@ -424,14 +424,6 @@ type ClusterReleaseSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ChannelGroup string `json:"channelGroup"`
-
-	// upgradeStartTime is the earliest time a NodePool version upgrade may start.
-	// Omit it for an immediate upgrade. Scheduling initial installation or a
-	// Cluster release through this field is not supported.
-	// Clear a pending schedule with a JSON merge PATCH setting this field to null.
-
-	// +optional
-	UpgradeStartTime *metav1.Time `json:"upgradeStartTime,omitempty"`
 }
 
 type NetworkingSpec struct {
@@ -600,9 +592,10 @@ type ControlPlaneUpgradeResult struct {
 type ClusterMaintenanceSpec struct {
 	// window defines when an automatic control-plane upgrade may start.
 	// When absent or null, the platform may start an automatic upgrade at any
-	// time. A PUT that includes the maintenance object but omits window clears
-	// any previously configured window. Omit the maintenance field entirely to
-	// preserve the current window.
+	// time. A PUT that omits window (whether by omitting the maintenance object
+	// entirely, or by including it without window) clears any previously
+	// configured window. Use PATCH to update individual fields without
+	// affecting others.
 	// When configured, at least 48 hours must remain available in every rolling
 	// 32-day period, including any initial wait before startTime and after
 	// subtracting exclusions.
@@ -611,9 +604,10 @@ type ClusterMaintenanceSpec struct {
 	Window *ControlPlaneMaintenanceWindow `json:"window"`
 
 	// exclusions are non-recurring periods during which automatic
-	// control-plane upgrades must not start. Set to an empty list to clear
-	// all exclusions; omitting this field in a PUT preserves the existing
-	// exclusions.
+	// control-plane upgrades must not start. A PUT that omits this field
+	// clears all exclusions. To clear exclusions explicitly, set to an
+	// empty list. Use PATCH to update individual fields without affecting
+	// others.
 	// At most three exclusions may be configured, each lasting no longer than
 	// 30 days. Overlapping exclusions count only once. Exclusions must leave at
 	// least 48 hours of maintenance availability in every rolling 32-day period,

@@ -36,9 +36,6 @@ func (c *Cluster) Default(_ context.Context) error {
 
 // ValidateCreate validates Cluster creation.
 func (c *Cluster) ValidateCreate(_ context.Context) error {
-	if c.Spec.Release.UpgradeStartTime != nil {
-		return fmt.Errorf("spec.release.upgradeStartTime is only supported for NodePool upgrades; use spec.maintenance for Cluster scheduling")
-	}
 	if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {
 		return fmt.Errorf("spec.safeName must be the default safe name for metadata.name")
 	}
@@ -47,9 +44,6 @@ func (c *Cluster) ValidateCreate(_ context.Context) error {
 
 // ValidateUpdate validates Cluster updates.
 func (c *Cluster) ValidateUpdate(_ context.Context, oldObj runtime.Object) error {
-	if c.Spec.Release.UpgradeStartTime != nil {
-		return fmt.Errorf("spec.release.upgradeStartTime is only supported for NodePool upgrades; use spec.maintenance for Cluster scheduling")
-	}
 	oldCluster, ok := oldObj.(*Cluster)
 	if !ok {
 		return fmt.Errorf("expected old object to be *Cluster, got %T", oldObj)

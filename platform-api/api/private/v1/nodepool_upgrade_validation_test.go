@@ -12,7 +12,7 @@ import (
 func upgradeValidationPool() *NodePool {
 	return &NodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: "customer"},
-		Spec:       NodePoolSpec{ClusterID: "example", Release: ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"}},
+		Spec:       NodePoolSpec{ClusterID: "example", Release: NodePoolReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"}},
 		Status:     NodePoolStatus{Version: "4.22.14"},
 	}
 }

@@ -30,8 +30,9 @@ status:
 `upgradeStartTime` is the earliest permitted start, not a guarantee of the exact start
 time. Omit it for immediate eligibility. Initial installation still uses
 `release.version` directly; `upgradeStartTime` is supported only after the pool has an
-observed installed version. Cluster scheduling continues to use
-`spec.maintenance`; Cluster admission rejects `release.upgradeStartTime`.
+observed installed version. `upgradeStartTime` belongs to `NodePoolReleaseSpec`
+and is absent from the Cluster release API. Cluster scheduling continues to use
+`spec.maintenance`.
 
 The upgrade coordinator waits for the start time and fresh healthy pool
 feedback, revalidates the target, and records approval through the
@@ -75,7 +76,9 @@ generation. Conditions report the current or latest outcome without a separate p
 
 Before acceptance, revise `release.version` or `release.upgradeStartTime`. Clearing
 only `upgradeStartTime` makes the desired upgrade immediately eligible. An ordinary
-public PUT omitting `upgradeStartTime` preserves it; explicit null clears it. To cancel
+public PUT replaces public release settings, so omitting `upgradeStartTime` or
+setting it to null clears it. A merge PATCH preserves an omitted schedule; explicit
+null clears it. To cancel
 a pending upgrade, restore the observed version and clear the schedule:
 
 ```sh

@@ -35,7 +35,7 @@ func validationFixtures(t *testing.T) (*nodePoolUpgradeValidator, *privatev1.Nod
 	}
 	pool := &privatev1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: "customer"},
-		Spec:       privatev1.NodePoolSpec{ClusterID: "example", Release: privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"}},
+		Spec:       privatev1.NodePoolSpec{ClusterID: "example", Release: privatev1.NodePoolReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"}},
 		Status:     privatev1.NodePoolStatus{Version: "4.22.14"},
 	}
 	return validator, pool

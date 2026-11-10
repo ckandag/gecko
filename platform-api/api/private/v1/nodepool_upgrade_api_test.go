@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -16,10 +17,41 @@ import (
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 	publicv1 "github.com/openshift-online/gecko/platform-api/api/public/v1"
 
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+
+	"sigs.k8s.io/yaml"
 )
+
+func TestUpgradeStartTimeOnlyExposedOnNodePool(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		schema string
+		want   bool
+	}{
+		{name: "private Cluster", schema: privatev1.ClusterSchemaYAML},
+		{name: "public Cluster", schema: publicv1.ClusterSchemaYAML},
+		{name: "private NodePool", schema: privatev1.NodePoolSchemaYAML, want: true},
+		{name: "public NodePool", schema: publicv1.NodePoolSchemaYAML, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var schema apiextv1.JSONSchemaProps
+			if err := yaml.Unmarshal([]byte(tt.schema), &schema); err != nil {
+				t.Fatal(err)
+			}
+			release := schema.Properties["spec"].Properties["release"]
+			start, present := release.Properties["upgradeStartTime"]
+			if present != tt.want {
+				t.Fatalf("upgradeStartTime exposed = %t, want %t", present, tt.want)
+			}
+			if present && (start.Type != "string" || start.Format != "date-time" || slices.Contains(release.Required, "upgradeStartTime")) {
+				t.Fatal("NodePool upgradeStartTime must be an optional timestamp")
+			}
+		})
+	}
+}
 
 func TestNodePoolUpgradePublicAPI(t *testing.T) {
 	privateScheme, publicScheme := runtime.NewScheme(), runtime.NewScheme()
@@ -35,7 +67,7 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 		TypeMeta:   metav1.TypeMeta{APIVersion: gvk.GroupVersion().String(), Kind: "NodePool"},
 		ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: "customer", Generation: 1},
 		Spec: privatev1.NodePoolSpec{
-			ClusterID: "example", Release: privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"},
+			ClusterID: "example", Release: privatev1.NodePoolReleaseSpec{Version: "4.22.14", ChannelGroup: "stable"},
 			Platform: privatev1.NodePoolPlatformSpec{Type: "GCP", GCP: &privatev1.GCPNodePoolPlatform{MachineType: "n2-standard-4", Zone: "us-central1-a", Subnet: "workers"}},
 		},
 		Status: privatev1.NodePoolStatus{Version: "4.22.14", VersionResolution: &privatev1.VersionResolutionResult{ReleaseImage: "private-image", ReleaseVersion: "4.22.14"}},
@@ -89,7 +121,13 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 	if updated.Spec.Release.Version != "4.22.16" || updated.Status.Version != "4.22.14" || updated.Spec.Release.UpgradeStartTime == nil {
 		t.Fatal("desired and observed versions or schedule were not preserved")
 	}
-	// Ordinary PUT omission preserves the pending schedule and private status.
+	// A merge PATCH preserves the schedule when it only changes scaling.
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"nodeCount": 2}}))
+	updated = read()
+	if updated.Spec.Release.UpgradeStartTime == nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
+		t.Fatal("scaling PATCH changed the schedule or private status")
+	}
+	// Standard PUT replacement clears an omitted schedule and preserves private status.
 	publicObj, err := converter.PrivateToPublic(updated)
 	if err != nil {
 		t.Fatal(err)
@@ -99,11 +137,11 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 	publicPool.Spec.NodeCount = ptr.To(int32(3))
 	assertOK(request(http.MethodPut, publicPool))
 	updated = read()
-	if updated.Spec.Release.UpgradeStartTime == nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
-		t.Fatal("unrelated update lost schedule or private status")
+	if updated.Spec.Release.UpgradeStartTime != nil || updated.Status.VersionResolution.ReleaseImage != "private-image" {
+		t.Fatal("PUT did not clear the omitted schedule or changed private status")
 	}
-	// Public PUT retains the existing optional-field preservation behavior.
-	// A merge PATCH explicitly removes the schedule, making the upgrade immediate.
+	// Explicit null in a PUT also clears a pending schedule.
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": "2026-11-07T12:00:00Z"}}}))
 	get := request(http.MethodGet, nil)
 	assertOK(get)
 	var body map[string]any
@@ -112,9 +150,11 @@ func TestNodePoolUpgradePublicAPI(t *testing.T) {
 	}
 	body["spec"].(map[string]any)["release"].(map[string]any)["upgradeStartTime"] = nil
 	assertOK(request(http.MethodPut, body))
-	if read().Spec.Release.UpgradeStartTime == nil {
-		t.Fatal("PUT changed optional-field preservation behavior")
+	if read().Spec.Release.UpgradeStartTime != nil {
+		t.Fatal("PUT did not clear the explicitly removed schedule")
 	}
+	// A merge PATCH can explicitly remove a schedule without replacing other fields.
+	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": "2026-11-07T12:00:00Z"}}}))
 	assertOK(request(http.MethodPatch, map[string]any{"spec": map[string]any{"release": map[string]any{"upgradeStartTime": nil}}}))
 	if read().Spec.Release.UpgradeStartTime != nil {
 		t.Fatal("merge PATCH did not remove the schedule")
