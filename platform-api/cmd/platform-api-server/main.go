@@ -27,6 +27,7 @@ import (
 	"github.com/openshift-online/gecko/platform-api/pkg/authn"
 	"github.com/openshift-online/gecko/platform-api/pkg/authz"
 	"github.com/openshift-online/gecko/platform-api/pkg/featureflags"
+	"github.com/openshift-online/gecko/platform-api/pkg/replicationguard"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -45,6 +46,10 @@ func main() {
 		authnKubeconfig string
 		authzKubeconfig string
 		disableAuth     bool
+		writeGuard      bool
+		region          string
+		leaderRegion    string
+		replicate       string
 		devAuth         bool
 		migrateOnly     bool
 	)
@@ -60,6 +65,10 @@ func main() {
 	flag.StringVar(&authnKubeconfig, "authentication-kubeconfig", "", "kubeconfig for delegated authentication (in-cluster if empty)")
 	flag.StringVar(&authzKubeconfig, "authorization-kubeconfig", "", "kubeconfig for delegated authorization (in-cluster if empty)")
 	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
+	flag.BoolVar(&writeGuard, "replication-write-guard", false, "reject replicated-resource public writes in a follower region")
+	flag.StringVar(&region, "region", "", "this API server's region")
+	flag.StringVar(&leaderRegion, "leader-region", "", "configured replication leader region")
+	flag.StringVar(&replicate, "replicate", "", "comma-separated replicated group/resources")
 	flag.BoolVar(&devAuth, "dev-auth", false, "accept X-Dev-User for public API authentication (local development only)")
 	flag.BoolVar(&migrateOnly, "migrate-only", false, "run Spanner DDL migrations and exit (for PreSync Jobs)")
 	flag.Parse()
@@ -92,6 +101,14 @@ func main() {
 
 	if err := validatePublicAuthAddress(enablePublic, address, publicAddress, devAuth, disableAuth); err != nil {
 		log.Fatal(err)
+	}
+
+	publicResources := getPublicResources()
+	guardMiddleware, err := replicationguard.New(replicationguard.Config{
+		Enabled: writeGuard, Region: region, LeaderRegion: leaderRegion, Replicate: replicate, Resources: publicResources,
+	})
+	if err != nil {
+		log.Fatalf("invalid replication write guard configuration: %v", err)
 	}
 
 	featureFlagEvaluator, err := featureflags.NewFromEnvironment()
@@ -190,7 +207,6 @@ func main() {
 	}
 
 	// Create server with resource configuration
-	publicResources := getPublicResources()
 	publicMiddlewareFactory := func(factory apiserver.StorageFactory, privateScheme *runtime.Scheme, stopCh <-chan struct{}) ([]func(http.Handler) http.Handler, error) {
 		stores, err := authz.NewStores(factory, privateScheme)
 		if err != nil {
@@ -205,6 +221,9 @@ func main() {
 		})
 
 		if disableAuth {
+			if writeGuard {
+				return []func(http.Handler) http.Handler{guardMiddleware}, nil
+			}
 			return nil, nil
 		}
 
@@ -216,6 +235,7 @@ func main() {
 		authorization := authz.Middleware(authorizer, logger, publicResources)
 		return []func(http.Handler) http.Handler{
 			authn.Middleware(authn.Config{AllowDevHeader: devAuth}),
+			guardMiddleware,
 			conditionalAuthorizationMiddleware(featureFlagEvaluator, authorization, logger),
 		}, nil
 	}

@@ -30,6 +30,13 @@ publicApi:
   # is disabled and the public API is enabled, set this explicitly (for
   # example, to 0.0.0.0) to expose the public Service port.
   bindAddress: ""
+  replicationWriteGuard:
+    # Roll out to every follower API replica before enabling mirror consumption.
+    enabled: false
+    region: ""
+    leaderRegion: ""
+    # Match the replication controller's replicate value in this environment.
+    replicate: roles.gcp.managed.openshift.io,rolebindings.gcp.managed.openshift.io
 
 platformRoles:
   # System PlatformRoles are managed by Helm/private API and are never
