@@ -663,7 +663,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Convert public to private, preserving internal fields
-	privateObj, err := h.converter.PublicToPrivate(publicObj, existingPrivate)
+	privateObj, err := h.convertPublicInputToPrivate(publicObj, existingPrivate, objMap, oldObjMap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert to private: %v", err))
 		return
@@ -948,7 +948,7 @@ func (h *ConvertingResourceHandler) patchPublicObject(namespace, name string, in
 // preserving server-managed metadata, and computing the new generation.
 func (h *ConvertingResourceHandler) convertPatchToPrivate(r *http.Request, input patchInput, publicObj client.Object) (runtime.Object, int, error) {
 
-	privateObj, err := h.converter.PublicToPrivate(publicObj, input.existingPrivate)
+	privateObj, err := h.convertPublicInputToPrivate(publicObj, input.existingPrivate, input.objMap, input.oldObjMap)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("failed to convert to private: %w", err)
 	}
