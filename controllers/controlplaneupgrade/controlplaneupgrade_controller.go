@@ -1,19 +1,5 @@
-// Package controlplaneupgrade implements the control-plane-upgrade-controller
-// reconciler.
-//
-// This controller selects and observes automatic control-plane upgrades (both
-// z-stream patch and y-stream minor). It reads HC-observed HostedCluster feedback
-// from Cluster.status.hostedClusterResult and requests an upgrade by setting
-// Cluster.spec.release.version; it never applies a release image directly —
-// the existing version-resolution and hc controllers do that.
-//
-// Z-stream upgrades select the newest patch in the current minor version.
-// Y-stream upgrades select the next sequential minor version, authorized by
-// Channel.spec.fleetMinorVersion. Both upgrade types respect maintenance windows
-// and exclusions from Cluster.spec.maintenance.window and
-// Cluster.spec.maintenance.exclusions, with override conditions for EOL proximity
-// (y-stream) and critical security/platform issues via
-// Cluster.spec.maintenance.criticalUpgrade (z-stream).
+// Package controlplaneupgrade coordinates automatic and customer-requested
+// control-plane upgrades through Cluster release intent and conditions.
 package controlplaneupgrade
 
 import (
@@ -35,113 +21,104 @@ import (
 )
 
 const (
-	adapterName = "control-plane-upgrade-controller"
-
-	conditionAvailable   = "ControlPlaneUpgradeAvailable"
-	conditionProgressing = "ControlPlaneUpgradeProgressing"
-	conditionDegraded    = "ControlPlaneUpgradeDegraded"
-
+	adapterName           = "control-plane-upgrade-controller"
+	conditionAvailable    = "ControlPlaneUpgradeAvailable"
+	conditionProgressing  = "ControlPlaneUpgradeProgressing"
+	conditionDegraded     = "ControlPlaneUpgradeDegraded"
 	targetSourceAutomatic = "automatic"
-
-	// requeuePending is used while waiting on feedback or a health/readiness gate.
-	requeuePending = 15 * time.Second
-	// requeueConflict retries a stale version write after a fresh reconciliation.
-	requeueConflict = time.Second
-	// requeueObserving is used while a requested upgrade is rolling out.
-	requeueObserving = 30 * time.Second
-	// requeueStable is used once there is nothing to do until the next event.
-	requeueStable = 5 * time.Minute
+	targetSourceCustomer  = "customer"
+	requeuePending        = 15 * time.Second
+	requeueConflict       = time.Second
+	requeueObserving      = 30 * time.Second
+	requeueStable         = 5 * time.Minute
 )
 
-// Reconciler selects and observes automatic control-plane upgrades for one Cluster
-// per reconciliation. It owns Cluster.status.controlPlaneUpgrade and the
-// ControlPlaneUpgrade* conditions; it never writes Cluster.status.hostedClusterResult,
-// which is owned exclusively by the hc-controller.
+// AdmissionGate is the integration boundary for progressive rollout admission.
+// A future capacity coordinator must make admission idempotent for this Cluster
+// and target. False preserves desired spec and leaves all installers unapproved.
+// No gate means unrestricted capacity, preserving current fleet behavior.
+type AdmissionGate func(context.Context, *privatev1.Cluster, string) (bool, error)
+
+// Reconciler owns upgrade decisions and conditions; HC feedback remains owned
+// by the HostedCluster installer. Release normalization never grants approval.
 type Reconciler struct {
 	apiClient client.Client
 	log       logger.Logger
+	now       func() time.Time
+	admission AdmissionGate
 }
 
-// NewReconciler creates a new control-plane-upgrade Reconciler.
 func NewReconciler(apiClient client.Client, log logger.Logger) *Reconciler {
-	return &Reconciler{apiClient: apiClient, log: log}
+	return &Reconciler{apiClient: apiClient, log: log, now: time.Now}
 }
 
-// Reconcile evaluates one Cluster. Different Clusters may reconcile concurrently.
-// Version changes use resource-version optimistic locking, so a competing update
-// to the same Cluster causes a fresh reconciliation instead of overwriting it.
-func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	log := r.log.With("controller", adapterName).With("cluster_id", req.Name)
+// WithAdmissionGate connects a capacity coordinator without changing the API.
+func (r *Reconciler) WithAdmissionGate(gate AdmissionGate) *Reconciler { r.admission = gate; return r }
 
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var cluster privatev1.Cluster
 	if err := r.apiClient.Get(ctx, req.NamespacedName, &cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Infof(ctx, "cluster not found, skipping")
-			return reconcile.Result{}, nil
-		}
-		return reconcile.Result{}, fmt.Errorf("%s: get cluster: %w", adapterName, err)
+		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
-
-	// This controller does not own the Cluster lifecycle or any finalizer.
 	if !cluster.DeletionTimestamp.IsZero() {
 		return reconcile.Result{}, nil
 	}
-
 	hc := cluster.Status.HostedClusterResult
 	if hc == nil || hc.Version == "" {
+		if privatev1.IsMinorRelease(cluster.Spec.Release.Version) {
+			return r.normalizeMinor(ctx, &cluster)
+		}
 		return r.writeStatus(ctx, &cluster, cluster.Status.ControlPlaneUpgrade, requeuePending,
-			newCondition(conditionAvailable, metav1.ConditionUnknown, "WaitingForHostedClusterFeedback",
-				"Waiting for observed HostedCluster version feedback"),
-			newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested",
-				"No control-plane upgrade has been requested"),
-			newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""),
-		)
+			newCondition(conditionAvailable, metav1.ConditionUnknown, "WaitingForHostedClusterFeedback", "Waiting for observed HostedCluster version feedback"),
+			newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested", "Initial installation is awaiting version feedback"),
+			newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 	}
-
-	completed := hc.Version
-	desired := hc.DesiredVersion
-	observed := hc.ObservedConditions
-
-	// An upgrade is already active — either HyperShift is progressing toward a target,
-	// or we (or a prior reconcile) requested one that HyperShift feedback has not yet
-	// caught up to. Only observe; never select another target.
-	if active, target := activeTarget(completed, desired, cluster.Spec.Release.Version); active {
-		result := recordActiveTarget(cluster.Status.ControlPlaneUpgrade, target)
-
-		if reason, message, failed := upgradeFailureReason(observed); failed {
-			result.FailureReason = reason
-			result.FailureMessage = message
-			return r.writeStatus(ctx, &cluster, result, requeueStable,
-				newCondition(conditionAvailable, metav1.ConditionFalse, "UpgradeInProgress",
-					fmt.Sprintf("Control-plane target is %s", target)),
-				newCondition(conditionProgressing, metav1.ConditionFalse, reason, message),
-				newCondition(conditionDegraded, metav1.ConditionTrue, reason, message),
-			)
+	completed, desired := hc.Version, hc.DesiredVersion
+	if meta.IsStatusConditionTrue(cluster.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) {
+		if privatev1.ClusterAutomaticReleasePreparing(&cluster) {
+			return r.finishAutomaticPreparation(ctx, &cluster)
 		}
-
-		reason := "WaitingForHostedCluster"
-		message := fmt.Sprintf("Waiting for HostedCluster to accept control-plane version %s", target)
-		if desired == target {
-			reason = "HostedClusterProgressing"
-			message = fmt.Sprintf("HostedCluster is upgrading the control plane from %s to %s", completed, target)
+		if privatev1.ClusterAutomaticReleaseCanceling(&cluster) {
+			return r.finishAutomaticCancellation(ctx, &cluster)
 		}
-		return r.writeStatus(ctx, &cluster, result, requeueObserving,
-			newCondition(conditionAvailable, metav1.ConditionFalse, "UpgradeInProgress",
-				fmt.Sprintf("Control-plane target is %s", target)),
-			newCondition(conditionProgressing, metav1.ConditionTrue, reason, message),
-			newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""),
-		)
+		return r.observeUpgrade(ctx, &cluster)
 	}
-
-	// Steady state: completed == desired == spec.release.version. Record completion of
-	// whatever we were tracking, then look for a new candidate.
+	// Existing HyperShift rollouts are observed, never replaced by new intent.
+	if active, target := feedbackTarget(completed, desired); active {
+		return r.observeExisting(ctx, &cluster, target)
+	}
+	if degraded := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == cluster.Generation && degraded.Reason == "PreparationFailed" {
+		return reconcile.Result{RequeueAfter: requeueStable}, nil
+	}
 	result := recordCompletion(cluster.Status.ControlPlaneUpgrade, completed)
+	if !equality.Semantic.DeepEqual(cluster.Status.ControlPlaneUpgrade, result) {
+		return r.writeStatus(ctx, &cluster, result, requeuePending,
+			newCondition(conditionProgressing, metav1.ConditionFalse, "UpgradeCompleted", "The control plane reached its target version"))
+	}
+	if privatev1.IsMinorRelease(cluster.Spec.Release.Version) {
+		return r.normalizeMinor(ctx, &cluster)
+	}
+	if cluster.Spec.Release.Version != completed {
+		// Only automation may create its approval receipt before changing spec.
+		// A customer version change never inherits an old automatic selection.
+		return r.approveUpgrade(ctx, &cluster, cluster.Spec.Release.Version, targetSourceCustomer)
+	}
+	return r.reconcileAutomatic(ctx, &cluster, result)
+}
 
+func (r *Reconciler) reconcileAutomatic(ctx context.Context, cluster *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult) (reconcile.Result, error) {
+	log := r.log
+	hc := cluster.Status.HostedClusterResult
+	completed, observed := hc.Version, hc.ObservedConditions
+	available, err := r.eligibleUpdates(ctx, cluster)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	// Prefer a newer patch in the Cluster's current major.minor stream. Z-stream
 	// selection does not depend on Channel fleet-minor authorization.
-	zCandidate, err := selectZStreamCandidate(completed, hc.AvailableUpdates)
+	zCandidate, err := selectZStreamCandidate(completed, available)
 	if err != nil {
-		return r.writeStatus(ctx, &cluster, result, requeueStable,
+		return r.writeStatus(ctx, cluster, result, requeueStable,
 			newCondition(conditionAvailable, metav1.ConditionFalse, "TargetSelectionFailed", err.Error()),
 			newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested",
 				"No control-plane upgrade has been requested"),
@@ -164,7 +141,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if apierrors.IsNotFound(err) {
 			if candidate == "" {
 				log.Infof(ctx, "channel %q not found, skipping y-stream target selection", channelName)
-				return r.writeStatus(ctx, &cluster, result, requeuePending,
+				return r.writeStatus(ctx, cluster, result, requeuePending,
 					newCondition(conditionAvailable, metav1.ConditionUnknown, "ChannelNotFound",
 						fmt.Sprintf("Channel %q not found", channelName)),
 					newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested",
@@ -177,9 +154,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, fmt.Errorf("%s: get channel %q: %w", adapterName, channelName, err)
 		}
 	} else {
-		yCandidate, err := selectYStreamCandidate(completed, hc.AvailableUpdates, channel.Spec.FleetMinorVersion)
+		yCandidate, err := selectYStreamCandidate(completed, available, channel.Spec.FleetMinorVersion)
 		if err != nil {
-			return r.writeStatus(ctx, &cluster, result, requeueStable,
+			return r.writeStatus(ctx, cluster, result, requeueStable,
 				newCondition(conditionAvailable, metav1.ConditionFalse, "TargetSelectionFailed", err.Error()),
 				newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested",
 					"No control-plane upgrade has been requested"),
@@ -201,7 +178,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// (same major.minor, strictly newer). This prevents an operator-set pin
 		// in a different minor version from bypassing y-stream health gates and
 		// Channel FleetMinorVersion authorization.
-		if isValidCriticalPin(criticalPin, completed) && isAdvertised(criticalPin, hc.AvailableUpdates) {
+		if isValidCriticalPin(criticalPin, completed) && isAdvertised(criticalPin, available) {
 			candidate = criticalPin
 			isYStream = false
 		} else if yCandidate != "" {
@@ -211,7 +188,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if candidate == "" {
-		return r.writeStatus(ctx, &cluster, result, requeueStable,
+		return r.writeStatus(ctx, cluster, result, requeueStable,
 			newCondition(conditionAvailable, metav1.ConditionFalse, "NoUpgradeAvailable",
 				fmt.Sprintf("No newer update is advertised for %s", completed)),
 			newCondition(conditionProgressing, metav1.ConditionFalse, "NoUpgradeRequested",
@@ -222,7 +199,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Health gates apply to both z-stream and y-stream
 	if ok, reason, message := healthOK(cluster.Status.Conditions, observed, isYStream); !ok {
-		return r.writeStatus(ctx, &cluster, result, requeuePending,
+		return r.writeStatus(ctx, cluster, result, requeuePending,
 			newCondition(conditionAvailable, metav1.ConditionFalse, reason, message),
 			newCondition(conditionProgressing, metav1.ConditionFalse, "UpgradeBlocked",
 				fmt.Sprintf("Control-plane upgrade to %s is waiting for HostedCluster health", candidate)),
@@ -231,49 +208,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Check for critical security or platform overrides.
-	override, overrideReason, overrideMsg := overrideCondition(&cluster, candidate, completed)
+	override, _, _ := overrideCondition(cluster, candidate, completed)
 
 	// Evaluate maintenance window/exclusions unless override applies
 	if !override {
-		permitted, reason, message, next := maintenancePermitted(&cluster, time.Now())
+		permitted, reason, message, next := maintenancePermitted(cluster, r.now())
 		if !permitted {
-			return r.writeMaintenanceBlocked(ctx, &cluster, result, completed, candidate, isYStream, reason, message, next)
+			return r.writeMaintenanceBlocked(ctx, cluster, result, completed, candidate, isYStream, reason, message, next)
 		}
 	}
 
-	// A future progressive-rollout admission gate belongs here, after target,
-	// health, and maintenance eligibility and before mutating the Cluster spec.
-
-	// Request the upgrade with the Cluster's observed resourceVersion. A
-	// concurrent writer wins or loses explicitly instead of being overwritten.
-	cluster.Spec.Release.Version = candidate
-	if err := r.apiClient.Update(ctx, &cluster); err != nil {
-		if apierrors.IsConflict(err) {
-			return reconcile.Result{RequeueAfter: requeueConflict}, nil
-		}
-		return reconcile.Result{}, fmt.Errorf("%s: request version %s for cluster %s: %w", adapterName, candidate, cluster.Name, err)
-	}
-
-	streamType := "z-stream"
-	upgradeReason := "UpdateSelected"
-	if isYStream {
-		streamType = "y-stream"
-	}
-	if override {
-		upgradeReason = overrideReason
-		log.Infof(ctx, "requested %s control-plane upgrade to %s (override: %s)", streamType, candidate, overrideMsg)
-	} else {
-		log.Infof(ctx, "requested %s control-plane upgrade to %s", streamType, candidate)
-	}
-
-	result = recordActiveTarget(result, candidate)
-	return r.writeStatus(ctx, &cluster, result, requeueObserving,
-		newCondition(conditionAvailable, metav1.ConditionTrue, upgradeReason,
-			fmt.Sprintf("Selected advertised control-plane update %s", candidate)),
-		newCondition(conditionProgressing, metav1.ConditionTrue, "UpgradeRequested",
-			fmt.Sprintf("Requested control-plane upgrade from %s to %s", completed, candidate)),
-		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""),
-	)
+	// Automatic intent is approved before spec changes, so its source survives
+	// restarts without being inferred from a matching historical target.
+	return r.approveUpgrade(ctx, cluster, candidate, targetSourceAutomatic)
 }
 
 func (r *Reconciler) writeMaintenanceBlocked(
@@ -289,7 +236,7 @@ func (r *Reconciler) writeMaintenanceBlocked(
 	// interval or at the next known opening, whichever is sooner.
 	requeue := requeueStable
 	if next != nil {
-		untilNext := time.Until(*next)
+		untilNext := next.Sub(r.now())
 		if untilNext > 0 && untilNext < requeueStable {
 			requeue = untilNext
 		}
@@ -315,20 +262,6 @@ func (r *Reconciler) writeMaintenanceBlocked(
 		newCondition(conditionProgressing, metav1.ConditionFalse, reason, message),
 		newCondition(conditionDegraded, degradedStatus, degradedReason, degradedMessage),
 	)
-}
-
-// activeTarget reports whether an upgrade is already active and, if so, its target.
-// An upgrade is active when HyperShift is progressing toward a desired version that
-// differs from the completed version, or when spec.release.version has been changed
-// but HostedCluster feedback has not yet caught up to it.
-func activeTarget(completed, desired, specVersion string) (active bool, target string) {
-	if desired != "" && desired != completed {
-		return true, desired
-	}
-	if specVersion != completed {
-		return true, specVersion
-	}
-	return false, ""
 }
 
 // upgradeFailureReason reports only an explicit release rejection. Generic
@@ -434,7 +367,7 @@ func (r *Reconciler) writeStatus(
 	if changed {
 		if err := r.apiClient.Status().Update(ctx, cluster); err != nil {
 			if apierrors.IsConflict(err) {
-				return reconcile.Result{}, nil
+				return reconcile.Result{RequeueAfter: requeueConflict}, nil
 			}
 			return reconcile.Result{}, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 		}

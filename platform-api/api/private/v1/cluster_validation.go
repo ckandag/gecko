@@ -52,6 +52,9 @@ func (c *Cluster) ValidateUpdate(_ context.Context, oldObj runtime.Object) error
 	// changes or controller status writes. Public updates have already applied
 	// omission/preservation semantics before reaching this validator.
 	enforceSchedulingLimits := !sameMaintenanceTiming(c.Spec.Maintenance, oldCluster.Spec.Maintenance)
+	if err := c.validateReleaseUpdate(oldCluster); err != nil {
+		return err
+	}
 
 	if oldCluster.Spec.SafeName == "" {
 		if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {

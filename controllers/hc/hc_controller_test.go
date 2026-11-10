@@ -210,7 +210,7 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 	c.Spec = privatev1.ClusterSpec{
 		SafeName: privatev1.DefaultSafeName(clusterID, c.UID),
 		InfraID:  "infra-xyz",
-		Release:  privatev1.ReleaseSpec{Version: version},
+		Release:  privatev1.ClusterReleaseSpec{Version: version},
 		Platform: privatev1.ClusterPlatformSpec{
 			Type: "GCP",
 			GCP: &privatev1.GCPClusterPlatform{
@@ -418,7 +418,7 @@ func TestReconcile_DependenciesNotReady_VRVersionMismatch(t *testing.T) {
 	clusterID := "cluster-abc"
 	// Cluster wants 4.15.0 but VR resolved 4.14.9.
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
@@ -434,7 +434,7 @@ func TestReconcile_DependenciesNotReady_VRVersionMismatch(t *testing.T) {
 func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, storeClient := buildReconciler(t, cluster, nil, tr, conflictErr())
@@ -450,7 +450,7 @@ func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, fmt.Errorf("write error"))
@@ -1457,4 +1457,60 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	require.Contains(t, err.Error(), "remove finalizer")
 	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "cleanup should have been called before finalizer removal failed")
 	require.True(t, storeClient.updateCalled)
+}
+
+func TestReconcile_PendingUpgradeContinuesObservedRelease(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.22.19")
+	cluster.Spec.Release.Version = "4.23.9"
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+	tr := mock.New()
+	r, _ := buildReconciler(t, cluster, nil, tr, nil)
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "pending intent must not stop existing release maintenance")
+	for _, manifest := range tr.ApplyCalls[0].Manifests {
+		require.NotContains(t, string(manifest), "4.23.9", "unapproved target must not reach any applied manifest")
+	}
+}
+
+func TestReconcile_ApprovedUpgradePersistsDispatchBoundaryBeforeApply(t *testing.T) {
+	for _, statusErr := range []error{nil, fmt.Errorf("status unavailable"), conflictErr()} {
+		name := "successful write"
+		if statusErr != nil {
+			name = statusErr.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			cluster := buildReadyCluster("cluster-abc", "4.23.9")
+			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9"}
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue})
+			tr := mock.New()
+			r, store := buildReconciler(t, cluster, nil, tr, statusErr)
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			if statusErr != nil && !apierrors.IsConflict(statusErr) {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Empty(t, tr.ApplyCalls, "dispatch must wait for a successful, durable boundary write")
+			require.Equal(t, metav1.ConditionUnknown, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted).Status)
+		})
+	}
+}
+
+func TestReconcile_AutomaticPreparationDoesNotDispatchTarget(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.23.8")
+	cluster.Spec.Release.Version = "4.23.9"
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.23.8", DesiredVersion: "4.23.8"}
+	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: "automatic"}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, Reason: privatev1.ControlPlaneUpgradePreparingReason, ObservedGeneration: cluster.Generation})
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "continue maintaining the observed release during preparation")
+	for _, manifest := range tr.ApplyCalls[0].Manifests {
+		require.NotContains(t, string(manifest), "4.23.9")
+	}
+	require.Nil(t, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted), "maintaining the old release must not mark the new target as dispatched")
 }

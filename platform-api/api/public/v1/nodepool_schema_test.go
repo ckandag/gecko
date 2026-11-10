@@ -27,6 +27,41 @@ func TestNodePoolSchemaChannelGroup(t *testing.T) {
 	}
 }
 
+func TestNodePoolSchemaReleaseVersion(t *testing.T) {
+	processor := newSchemaProcessor(t, NodePoolSchemaYAML)
+	for _, tt := range []struct {
+		version string
+		valid   bool
+	}{
+		{version: "4.23.9", valid: true},
+		{version: "5.0.0-ec.6", valid: true},
+		{version: "4.23"},
+		{version: "4"},
+		{version: "v4.23.9"},
+		{version: "4.23.9-01"},
+	} {
+		t.Run(tt.version, func(t *testing.T) {
+			for _, operation := range []string{"create", "update"} {
+				t.Run(operation, func(t *testing.T) {
+					object := nodePoolAsMap(t, "stable")
+					object["spec"].(map[string]any)["release"].(map[string]any)["version"] = tt.version
+					var old map[string]any
+					if operation == "update" {
+						old = nodePoolAsMap(t, "stable")
+					}
+					errs := processor.Process(t.Context(), object, old)
+					if tt.valid && len(errs) > 0 {
+						t.Fatalf("expected version %q to pass schema validation, got: %v", tt.version, errs)
+					}
+					if !tt.valid && (len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), "version must be")) {
+						t.Fatalf("expected version %q to fail version validation, got: %v", tt.version, errs)
+					}
+				})
+			}
+		})
+	}
+}
+
 func nodePoolAsMap(t *testing.T, group string) map[string]any {
 	t.Helper()
 	return objectAsMap(t, NodePool{
@@ -38,7 +73,7 @@ func nodePoolAsMap(t *testing.T, group string) map[string]any {
 				Type: "GCP",
 				GCP:  &GCPNodePoolPlatform{MachineType: "n2-standard-4", Zone: "us-central1-a", Subnet: "test-subnet"},
 			},
-			Release: ReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: group},
+			Release: NodePoolReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: group},
 		},
 	})
 }

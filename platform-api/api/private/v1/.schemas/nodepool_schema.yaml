@@ -250,7 +250,8 @@ properties:
           version:
             description: |-
               version is the OpenShift version to install.
-              Specified as semver v2 major, minor, patch with an optional prerelease and without a leading "v". (e.g., "4.14.9" or "5.0.0-ec.6")
+              Specify a complete semantic version, with an optional prerelease and without
+              a leading "v" (for example, "4.23.9" or "5.0.0-ec.6").
             maxLength: 63
             minLength: 1
             type: string

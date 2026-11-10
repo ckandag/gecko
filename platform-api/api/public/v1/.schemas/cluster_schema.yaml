@@ -370,7 +370,7 @@ properties:
         type: object
       release:
         description: |-
-          ReleaseSpec defines the target OCP release version.
+          ClusterReleaseSpec defines the target OCP release version.
           The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
           channelGroup:
@@ -383,9 +383,9 @@ properties:
             minLength: 1
             type: string
             x-kubernetes-validations:
-            - message: version must be a valid semantic version with an optional prerelease
-                and without a leading 'v' (e.g., 4.14.9 or 5.0.0-ec.6)
-              rule: self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$')
+            - message: version must be major.minor or a complete semantic version
+                without a leading v (e.g., 4.23, 4.23.9 or 5.0.0-ec.6)
+              rule: self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?)?$')
         required:
         - channelGroup
         - version

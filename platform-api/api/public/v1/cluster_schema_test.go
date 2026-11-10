@@ -42,14 +42,14 @@ func TestClusterSchemaAcceptsPrereleaseVersion(t *testing.T) {
 }
 
 func TestClusterSchemaRejectsInvalidReleaseVersions(t *testing.T) {
-	for _, version := range []string{"v5.0.0", "5.0.0-01"} {
+	for _, version := range []string{"v5.0.0", "5.0.0-01", "04.23", "4.023", "4.23-rc.1", "4"} {
 		t.Run(version, func(t *testing.T) {
 			processor := newClusterSchemaProcessor(t)
 			errs := processor.Process(context.Background(), clusterAsMap(t, validCluster(version)), nil)
 			if len(errs) == 0 {
 				t.Fatalf("expected version %q to fail schema validation", version)
 			}
-			if !strings.Contains(errs.ToAggregate().Error(), "version must be a valid semantic version") {
+			if !strings.Contains(errs.ToAggregate().Error(), "version must be major.minor") {
 				t.Fatalf("expected version validation error, got: %v", errs)
 			}
 		})
@@ -114,7 +114,7 @@ func validCluster(version string) Cluster {
 					},
 				},
 			},
-			Release: ReleaseSpec{
+			Release: ClusterReleaseSpec{
 				Version:      version,
 				ChannelGroup: "candidate",
 			},
@@ -171,4 +171,11 @@ func objectAsMap(t *testing.T, input any) map[string]any {
 	}
 
 	return object
+}
+
+func TestClusterSchemaAcceptsMinorRelease(t *testing.T) {
+	processor := newClusterSchemaProcessor(t)
+	if errs := processor.Process(t.Context(), clusterAsMap(t, validCluster("4.23")), nil); len(errs) > 0 {
+		t.Fatalf("minor release failed schema validation: %v", errs)
+	}
 }

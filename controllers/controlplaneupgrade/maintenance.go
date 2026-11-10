@@ -32,6 +32,14 @@ func maintenancePermitted(cluster *privatev1.Cluster, now time.Time) (permitted 
 		return true, "", "", nil
 	}
 
+	// A completed rollout consumes the current occurrence. A newly advertised
+	// patch must wait for a new opening, even if this window is still open.
+	if result := cluster.Status.ControlPlaneUpgrade; result != nil && result.CompletedTime != nil {
+		if next := nextWindowAfter(m.Window, result.CompletedTime.Time); next != nil && now.Before(*next) {
+			return false, "WaitingForNextMaintenanceWindow", "Waiting for the next maintenance-window opening", next
+		}
+	}
+
 	// Check if we're currently in a maintenance window
 	inWindow, next := inMaintenanceWindow(m.Window, now)
 	if inWindow {
@@ -157,4 +165,25 @@ func derefExclusions(e *[]privatev1.ControlPlaneMaintenanceExclusion) []privatev
 		return nil
 	}
 	return *e
+}
+
+// nextWindowAfter finds the first recurrence strictly after a completed rollout.
+func nextWindowAfter(window *privatev1.ControlPlaneMaintenanceWindow, after time.Time) *time.Time {
+	if window.Recurrence.Frequency != "weekly" {
+		return nil
+	}
+	start := window.StartTime.UTC()
+	day := after.UTC()
+	for offset := 0; offset <= 7; offset++ {
+		candidate := time.Date(day.Year(), day.Month(), day.Day(), start.Hour(), start.Minute(), start.Second(), 0, time.UTC).AddDate(0, 0, offset)
+		if !candidate.After(after) || candidate.Before(start) {
+			continue
+		}
+		for _, name := range window.Recurrence.DaysOfWeek {
+			if weekday, ok := parseWeekday(name); ok && candidate.Weekday() == weekday {
+				return &candidate
+			}
+		}
+	}
+	return nil
 }

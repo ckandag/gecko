@@ -162,7 +162,7 @@ func TestReconciler_HappyPath(t *testing.T) {
 				effectiveGroup = "stable"
 			}
 			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 3}}
-			cluster.Spec.Release = privatev1.ReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: group}
+			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: group}
 			release := catalogVersion("5.0.0-ec.6", "quay.io/ocp@sha256:original", effectiveGroup)
 			r, store := buildReconciler(t, cluster, release)
 			result, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
@@ -215,7 +215,7 @@ func TestReconciler_CatalogUnavailable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cluster := &privatev1.Cluster{}
-			cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.22.14"}
+			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.22.14"}
 			r, store := buildReconciler(t, cluster, tc.release)
 			result, err := r.Reconcile(context.Background(), clusterReq("cluster"))
 			require.NoError(t, err)
@@ -261,7 +261,7 @@ func TestReconciler_StatusUpdateError(t *testing.T) {
 func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 	ctx := context.Background()
 	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet"}}
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.22.14", ChannelGroup: "candidate"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.22.14", ChannelGroup: "candidate"}
 	release := catalogVersion("4.22.14", "original", "candidate")
 	channel := &privatev1.Channel{ObjectMeta: metav1.ObjectMeta{Name: "candidate"}}
 	channel.Spec.FleetMinorVersion = "4.22"
@@ -295,7 +295,7 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
 			ctx := context.Background()
 			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 1}}
-			cluster.Spec.Release = privatev1.ReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
+			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
 			release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
 			objects := []client.Object{cluster}
 			if !missing {
@@ -386,6 +386,29 @@ func TestNextChannelVersion(t *testing.T) {
 			got, err := nextChannelVersion(tc.version, tc.fleetMinor)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestReconciler_PendingReleaseKeepsObservedImage(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(fmt.Sprint(approved), func(t *testing.T) {
+			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 2}}
+			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.23.9", ChannelGroup: "stable"}
+			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
+			target := "4.22.19"
+			if approved {
+				target = "4.23.9"
+				cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: target}
+				cluster.Status.Conditions = []metav1.Condition{{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue}}
+			}
+			r, store := buildReconciler(t, cluster, catalogVersion(target, "selected-image", "stable"))
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			resolved := store.statusWriter.captured.(*privatev1.Cluster).Status.VersionResolution
+			require.Equal(t, target, resolved.ReleaseVersion)
+			require.Equal(t, "selected-image", resolved.ReleaseImage)
+			require.Equal(t, "4.23.9", cluster.Spec.Release.Version)
 		})
 	}
 }

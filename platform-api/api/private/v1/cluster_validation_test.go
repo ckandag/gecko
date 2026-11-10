@@ -296,3 +296,131 @@ func TestClusterValidateUpdate_UnchangedStructuralErrors(t *testing.T) {
 	updated := old.DeepCopy()
 	assertMaintenanceValidationError(t, updated.ValidateUpdate(t.Context(), old), "frequency must be weekly")
 }
+
+func TestClusterValidateUpdate_ReleaseIntent(t *testing.T) {
+	for _, test := range []struct {
+		name, version   string
+		active, invalid bool
+	}{
+		{name: "minor", version: "4.23"}, {name: "exact", version: "4.23.9"},
+		{name: "downgrade", version: "4.21.9", invalid: true}, {name: "unsupported minor", version: "4.24", invalid: true},
+		{name: "active upgrade", version: "4.23", active: true, invalid: true},
+		{name: "identical retry during upgrade", version: "4.22.19", active: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := validClusterWithWindow()
+			old.Spec.Release = ClusterReleaseSpec{Version: "4.22.19", ChannelGroup: "stable"}
+			old.Status.HostedClusterResult = &HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19", AvailableUpdates: []string{"4.23.9"}}
+			if test.active {
+				old.Status.Conditions = append(old.Status.Conditions, metav1.Condition{Type: ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue})
+			}
+			changed := old.DeepCopy()
+			changed.Spec.Release.Version = test.version
+			err := changed.ValidateUpdate(t.Context(), old)
+			if (err != nil) != test.invalid {
+				t.Fatalf("ValidateUpdate() = %v, invalid=%v", err, test.invalid)
+			}
+		})
+	}
+}
+
+func TestClusterInstallationVersion_RequiresMatchingApproval(t *testing.T) {
+	cluster := &Cluster{Spec: ClusterSpec{Release: ClusterReleaseSpec{Version: "4.23.9"}}, Status: ClusterStatus{HostedClusterResult: &HostedClusterResult{Version: "4.22.19"}}}
+	if got := ClusterInstallationVersion(cluster); got != "4.22.19" {
+		t.Fatalf("unapproved release leaked: %s", got)
+	}
+	cluster.Status.Conditions = []metav1.Condition{{Type: ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue}}
+	cluster.Status.ControlPlaneUpgrade = &ControlPlaneUpgradeResult{TargetVersion: "4.23.8"}
+	if ClusterReleaseApproved(cluster) {
+		t.Fatal("approval for a different target must not authorize this spec")
+	}
+	cluster.Status.ControlPlaneUpgrade.TargetVersion = "4.23.9"
+	if got := ClusterInstallationVersion(cluster); got != "4.23.9" {
+		t.Fatalf("approved target = %s", got)
+	}
+	cluster.Generation++ // Unrelated edits must not release the admission lock.
+	if !ClusterUpgradeActive(cluster) {
+		t.Fatal("approval was lost after an unrelated generation change")
+	}
+}
+
+func TestClusterUpgradeSubmissionIsBoundToApproval(t *testing.T) {
+	cluster := &Cluster{Status: ClusterStatus{Conditions: []metav1.Condition{
+		{Type: ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: 5},
+		{Type: ControlPlaneUpgradeSubmitted, Status: metav1.ConditionTrue, ObservedGeneration: 3},
+	}}}
+	if ClusterUpgradeSubmissionStarted(cluster) {
+		t.Fatal("previous rollout dispatch must not authorize this target")
+	}
+	cluster.Status.Conditions[1].ObservedGeneration = 5
+	if !ClusterUpgradeSubmissionStarted(cluster) {
+		t.Fatal("current dispatch must remain protected")
+	}
+	cluster.Generation = 8
+	if !ClusterUpgradeSubmissionStarted(cluster) {
+		t.Fatal("unrelated edits must not forget current dispatch")
+	}
+}
+
+func TestClusterAutomaticPreparationOnlyAllowsApprovedNormalization(t *testing.T) {
+	old := validClusterWithWindow()
+	old.Generation = 5
+	old.Spec.Release = ClusterReleaseSpec{Version: "4.23.8", ChannelGroup: "stable"}
+	old.Status.HostedClusterResult = &HostedClusterResult{Version: "4.23.8", DesiredVersion: "4.23.8"}
+	old.Status.ControlPlaneUpgrade = &ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: "automatic"}
+	old.Status.Conditions = []metav1.Condition{{Type: ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, Reason: ControlPlaneUpgradePreparingReason, ObservedGeneration: 5}}
+	for _, test := range []struct {
+		name, version, channel string
+		invalid                bool
+	}{
+		{name: "normalize accepted target", version: "4.23.9", channel: "stable"},
+		{name: "different target", version: "4.23.10", channel: "stable", invalid: true},
+		{name: "different channel", version: "4.23.9", channel: "fast", invalid: true},
+		{name: "minor request while accepted", version: "4.23", channel: "stable", invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := old.DeepCopy()
+			changed.Spec.Release = ClusterReleaseSpec{Version: test.version, ChannelGroup: test.channel}
+			err := changed.ValidateUpdate(t.Context(), old)
+			if (err != nil) != test.invalid {
+				t.Fatalf("ValidateUpdate=%v, invalid=%v", err, test.invalid)
+			}
+			if !test.invalid && ClusterReleaseApproved(changed) {
+				t.Fatal("spec normalization alone must not authorize installation")
+			}
+			if !test.invalid && ClusterInstallationVersion(changed) != "4.23.8" {
+				t.Fatal("preparation must retain the observed version")
+			}
+		})
+	}
+}
+
+func TestClusterAutomaticCancellationOnlyRestoresUnsubmittedObservedVersion(t *testing.T) {
+	for _, test := range []struct {
+		name, version, channel string
+		submitted, invalid     bool
+	}{
+		{name: "restore observed release", version: "4.23.8", channel: "stable"},
+		{name: "different target", version: "4.23.10", channel: "stable", invalid: true},
+		{name: "different channel", version: "4.23.8", channel: "fast", invalid: true},
+		{name: "uncertain dispatch", version: "4.23.8", channel: "stable", submitted: true, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := validClusterWithWindow()
+			old.Generation = 5
+			old.Spec.Release = ClusterReleaseSpec{Version: "4.23.9", ChannelGroup: "stable"}
+			old.Status.HostedClusterResult = &HostedClusterResult{Version: "4.23.8", DesiredVersion: "4.23.8"}
+			old.Status.ControlPlaneUpgrade = &ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: "automatic"}
+			old.Status.Conditions = []metav1.Condition{{Type: ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, Reason: ControlPlaneUpgradeCancelingReason, ObservedGeneration: 5}}
+			if test.submitted {
+				old.Status.Conditions = append(old.Status.Conditions, metav1.Condition{Type: ControlPlaneUpgradeSubmitted, Status: metav1.ConditionUnknown, ObservedGeneration: 5})
+			}
+			changed := old.DeepCopy()
+			changed.Spec.Release = ClusterReleaseSpec{Version: test.version, ChannelGroup: test.channel}
+			err := changed.ValidateUpdate(t.Context(), old)
+			if (err != nil) != test.invalid {
+				t.Fatalf("ValidateUpdate=%v, invalid=%v", err, test.invalid)
+			}
+		})
+	}
+}

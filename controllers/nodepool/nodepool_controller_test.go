@@ -206,7 +206,7 @@ func testNodePool(vrVersion string) *privatev1.NodePool {
 		},
 	}
 	if vrVersion != "" {
-		np.Spec.Release = privatev1.ReleaseSpec{Version: vrVersion}
+		np.Spec.Release = privatev1.NodePoolReleaseSpec{Version: vrVersion}
 		np.Status.VersionResolution = &privatev1.VersionResolutionResult{
 			ReleaseImage:   "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
 			ReleaseVersion: vrVersion,

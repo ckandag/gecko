@@ -155,9 +155,8 @@ properties:
         - type
         type: object
       release:
-        description: |-
-          ReleaseSpec defines the target OCP release version.
-          The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
+        description: NodePoolReleaseSpec defines the complete OpenShift release to
+          install on a node pool.
         properties:
           channelGroup:
             maxLength: 63
