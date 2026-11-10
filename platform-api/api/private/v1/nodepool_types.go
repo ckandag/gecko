@@ -67,7 +67,7 @@ type NodePoolSpec struct {
 	//
 	// +orlop:public
 	// +required
-	Release ReleaseSpec `json:"release"`
+	Release NodePoolReleaseSpec `json:"release"`
 
 	// nodeCount is the desired number of nodes the pool should maintain. If unset, the controller default value is 0.
 	// nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, nodeCount must be omitted and autoscaling will control the NodePool size internally.
@@ -102,6 +102,33 @@ type NodePoolSpec struct {
 	// +listMapKey=key
 	// +listMapKey=effect
 	Taints []TaintSpec `json:"taints,omitempty"`
+}
+
+// NodePoolReleaseSpec defines the complete OpenShift release to install on a node pool.
+type NodePoolReleaseSpec struct {
+	// version is the OpenShift version to install.
+	// Specify a complete semantic version, with an optional prerelease and without
+	// a leading "v" (for example, "4.23.9" or "5.0.0-ec.6").
+	//
+	// +orlop:public
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule=`self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$')`,message="version must be a valid semantic version with an optional prerelease and without a leading 'v' (e.g., 4.14.9 or 5.0.0-ec.6)"
+	// +example="4.23.9"
+	Version string `json:"version"`
+
+	// channelGroup selects a platform-managed Channel used to choose and resolve
+	// the release (for example, stable, fast, eus, candidate, or nightly).
+	// Available Channels depend on the environment; channel groups must be
+	// lowercase DNS labels (not arbitrary DNS subdomain Channel names).
+	//
+	// +orlop:public
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	ChannelGroup string `json:"channelGroup"`
 }
 
 type NodePoolPlatformSpec struct {

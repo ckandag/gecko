@@ -82,7 +82,7 @@ type ClusterSpec struct {
 	// release specifies what OpenShift release to use for the cluster.
 
 	// +required
-	Release ReleaseSpec `json:"release"`
+	Release ClusterReleaseSpec `json:"release"`
 
 	// maintenance groups control-plane upgrade scheduling settings.
 	// When omitted, the platform may start an automatic upgrade at any time.
@@ -396,9 +396,9 @@ type GCPResourceLabel struct {
 	Value string `json:"value,omitempty"`
 }
 
-// ReleaseSpec defines the target OCP release version.
+// ClusterReleaseSpec defines the target OCP release version.
 // The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
-type ReleaseSpec struct {
+type ClusterReleaseSpec struct {
 	// version is the desired OpenShift release. A major.minor value (for example,
 	// 4.23) selects the newest eligible patch in the selected channel. Cluster
 	// requests are normalized to a complete version before upgrade approval.

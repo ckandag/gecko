@@ -26,7 +26,7 @@ func TestClusterChannelGroup(t *testing.T) {
 		expected []string
 	}{
 		{name: "omitted uses stable", object: &privatev1.Cluster{}, expected: []string{DefaultChannelGroup}},
-		{name: "explicit channel", object: &privatev1.Cluster{Spec: privatev1.ClusterSpec{Release: privatev1.ReleaseSpec{ChannelGroup: "candidate"}}}, expected: []string{"candidate"}},
+		{name: "explicit channel", object: &privatev1.Cluster{Spec: privatev1.ClusterSpec{Release: privatev1.ClusterReleaseSpec{ChannelGroup: "candidate"}}}, expected: []string{"candidate"}},
 		{name: "other resource", object: &privatev1.Channel{}},
 	}
 	for _, tt := range tests {
@@ -40,9 +40,9 @@ func TestToClustersUsesChannelIndex(t *testing.T) {
 	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithObjects(
 		&privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "project-a", Name: "default-stable"}},
 		&privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "project-b", Name: "explicit-stable"},
-			Spec: privatev1.ClusterSpec{Release: privatev1.ReleaseSpec{ChannelGroup: "stable"}}},
+			Spec: privatev1.ClusterSpec{Release: privatev1.ClusterReleaseSpec{ChannelGroup: "stable"}}},
 		&privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "project-a", Name: "candidate"},
-			Spec: privatev1.ClusterSpec{Release: privatev1.ReleaseSpec{ChannelGroup: "candidate"}}},
+			Spec: privatev1.ClusterSpec{Release: privatev1.ClusterReleaseSpec{ChannelGroup: "candidate"}}},
 	).WithIndex(&privatev1.Cluster{}, ClusterChannelGroupField, ClusterChannelGroup).Build()
 	log, err := logger.NewLogger(logger.Config{Level: "error", Format: logger.FormatText, Writer: &bytes.Buffer{}, Component: "test"})
 	require.NoError(t, err)

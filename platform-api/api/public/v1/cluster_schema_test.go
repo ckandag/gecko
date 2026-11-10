@@ -114,7 +114,7 @@ func validCluster(version string) Cluster {
 					},
 				},
 			},
-			Release: ReleaseSpec{
+			Release: ClusterReleaseSpec{
 				Version:      version,
 				ChannelGroup: "candidate",
 			},

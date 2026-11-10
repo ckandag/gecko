@@ -6,6 +6,10 @@ minor and the selected channel. Complete versions, including prereleases, are
 also accepted. Initial installation selects minor requests from the mirrored
 Version catalog because no HostedCluster upgrade feedback exists yet.
 
+Cluster uses `ClusterReleaseSpec`, independently of `NodePoolReleaseSpec`.
+NodePools continue to require complete versions until their resolver supports
+minor selection. Both release objects keep the same JSON fields.
+
 The controller normalizes a customer minor request to its concrete target in spec before
 approval. `status.hostedClusterResult.version` remains the actual observed
 version. Clients can display that as **Version**, and a differing spec version as

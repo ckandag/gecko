@@ -210,7 +210,7 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 	c.Spec = privatev1.ClusterSpec{
 		SafeName: privatev1.DefaultSafeName(clusterID, c.UID),
 		InfraID:  "infra-xyz",
-		Release:  privatev1.ReleaseSpec{Version: version},
+		Release:  privatev1.ClusterReleaseSpec{Version: version},
 		Platform: privatev1.ClusterPlatformSpec{
 			Type: "GCP",
 			GCP: &privatev1.GCPClusterPlatform{
@@ -418,7 +418,7 @@ func TestReconcile_DependenciesNotReady_VRVersionMismatch(t *testing.T) {
 	clusterID := "cluster-abc"
 	// Cluster wants 4.15.0 but VR resolved 4.14.9.
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
@@ -434,7 +434,7 @@ func TestReconcile_DependenciesNotReady_VRVersionMismatch(t *testing.T) {
 func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, storeClient := buildReconciler(t, cluster, nil, tr, conflictErr())
@@ -450,7 +450,7 @@ func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.14.9")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: "4.15.0"}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.15.0"}
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, fmt.Errorf("write error"))

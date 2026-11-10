@@ -207,7 +207,7 @@ func readyCluster(version string, availableUpdates []string) *privatev1.Cluster 
 	cluster.SetNamespace("hyperfleet")
 	cluster.SetGeneration(1)
 	cluster.SetResourceVersion("7")
-	cluster.Spec.Release = privatev1.ReleaseSpec{Version: version}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: version}
 	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
 		Version:          version,
 		DesiredVersion:   version,
@@ -993,7 +993,7 @@ func TestMaintenanceCompletedUpgradeWaitsForNextOpening(t *testing.T) {
 }
 
 func TestReconcile_InitialMinorNormalizesFromSelectedChannel(t *testing.T) {
-	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster-1", Namespace: "hyperfleet"}, Spec: privatev1.ClusterSpec{Release: privatev1.ReleaseSpec{Version: "4.23", ChannelGroup: "stable"}}}
+	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster-1", Namespace: "hyperfleet"}, Spec: privatev1.ClusterSpec{Release: privatev1.ClusterReleaseSpec{Version: "4.23", ChannelGroup: "stable"}}}
 	r, store := buildReconciler(t, cluster)
 	store.persistUpdates = true
 	store.releases = []privatev1.Version{

@@ -370,7 +370,7 @@ properties:
         type: object
       release:
         description: |-
-          ReleaseSpec defines the target OCP release version.
+          ClusterReleaseSpec defines the target OCP release version.
           The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
           channelGroup:

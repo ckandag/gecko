@@ -332,7 +332,7 @@ func clusterForMaintenanceAPITest() publicv1.Cluster {
 					},
 				},
 			},
-			Release: publicv1.ReleaseSpec{Version: "4.22.20", ChannelGroup: "stable"},
+			Release: publicv1.ClusterReleaseSpec{Version: "4.22.20", ChannelGroup: "stable"},
 			Maintenance: &publicv1.ClusterMaintenanceSpec{
 				Window: &publicv1.ControlPlaneMaintenanceWindow{
 					StartTime: metav1.NewTime(start), DurationSeconds: 14400,
