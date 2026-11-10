@@ -129,6 +129,13 @@ type NodePoolReleaseSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ChannelGroup string `json:"channelGroup"`
+
+	// upgradeStartTime is the earliest time a NodePool version upgrade may start.
+	// Omit it for an immediate upgrade. Scheduling initial installation is not supported.
+	// Clear a pending schedule with a JSON merge PATCH setting this field to null.
+	// +orlop:public
+	// +optional
+	UpgradeStartTime *metav1.Time `json:"upgradeStartTime,omitempty"`
 }
 
 type NodePoolPlatformSpec struct {
@@ -329,6 +336,12 @@ type NodePoolStatus struct {
 	// +patchStrategy=merge
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// version is the last OpenShift version observed as applied to this
+	// NodePool. It does not advance merely because an upgrade was requested.
+	// +orlop:public
+	// +optional
+	Version string `json:"version,omitempty"`
 
 	// VersionResolution is written by the nodepool-vr controller.
 	// Not exposed on the public API.

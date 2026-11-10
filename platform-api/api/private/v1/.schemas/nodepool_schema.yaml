@@ -247,6 +247,13 @@ properties:
             minLength: 1
             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
             type: string
+          upgradeStartTime:
+            description: |-
+              upgradeStartTime is the earliest time a NodePool version upgrade may start.
+              Omit it for an immediate upgrade. Scheduling initial installation is not supported.
+              Clear a pending schedule with a JSON merge PATCH setting this field to null.
+            format: date-time
+            type: string
           version:
             description: |-
               version is the OpenShift version to install.
@@ -384,6 +391,11 @@ properties:
         x-kubernetes-list-map-keys:
         - type
         x-kubernetes-list-type: map
+      version:
+        description: |-
+          version is the last OpenShift version observed as applied to this
+          NodePool. It does not advance merely because an upgrade was requested.
+        type: string
       versionResolution:
         description: |-
           VersionResolution is written by the nodepool-vr controller.

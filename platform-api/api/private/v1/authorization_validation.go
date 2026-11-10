@@ -77,17 +77,15 @@ func NormalizeEmail(email string) (string, error) {
 	return parts[0] + "@" + strings.ToLower(parts[1]), nil
 }
 
-// ValidatorDeps supplies storage-backed checks that cannot live in the API
-// types package without creating an import cycle with the authorization
-// implementation.
-// A nil callback means storage-backed existence validation is unavailable,
-// which is intentional for private-only or standalone server modes.
-// Structural RoleRef validation still applies in that case.
+// ValidatorDeps supplies storage-backed checks without coupling API types to
+// server storage implementations. A nil callback skips only its storage-backed
+// check, as needed by standalone API validation tests.
 //
 //nolint:kubeapilinter // runtime validation callbacks are not serialized API fields.
 type ValidatorDeps struct {
-	RoleExists         func(context.Context, string, string) (bool, error)
-	PlatformRoleExists func(context.Context, string) (bool, error)
+	RoleExists              func(context.Context, string, string) (bool, error)
+	PlatformRoleExists      func(context.Context, string) (bool, error)
+	ValidateNodePoolUpgrade func(context.Context, *NodePool, string) error
 }
 
 var validatorDeps struct {
@@ -95,9 +93,8 @@ var validatorDeps struct {
 	deps ValidatorDeps
 }
 
-// SetValidatorDeps installs the runtime checks used by RoleBinding
-// validation. It is safe to call during server startup before requests are
-// served.
+// SetValidatorDeps installs storage-backed runtime validation checks. It is
+// safe to call during server startup before requests are served.
 func SetValidatorDeps(deps ValidatorDeps) {
 	validatorDeps.Lock()
 	validatorDeps.deps = deps

@@ -653,6 +653,41 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	require.Equal(t, "AsExpected", progressing.Reason)
 }
 
+func TestApplyStatusConditions_ObservedVersionChangeIsPersisted(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+	status := &transport.Status{
+		Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":            "True",
+				"allNodesHealthyCondition":  "True",
+				"allMachinesReadyCondition": "True",
+				"updatingConfigCondition":   "False",
+				"updatingVersionCondition":  "False",
+				"version":                   "4.16.0",
+			},
+		},
+	}
+	r := &Reconciler{}
+	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	require.False(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	status.ResourceStatuses[npKey]["version"] = "4.16.1"
+	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	require.Equal(t, "4.16.1", np.Status.Version)
+}
+
+func TestSetWaitingNPConditionsPreservesUpgradeStatus(t *testing.T) {
+	np := testNodePool("4.16.1")
+	np.Status.Version = "4.16.0"
+	upgrade := metav1.Condition{Type: "NodePoolUpgradeProgressing", Status: metav1.ConditionTrue, Reason: "UpgradeAccepted", LastTransitionTime: metav1.Now()}
+	np.Status.Conditions = append(np.Status.Conditions, upgrade)
+	require.True(t, setWaitingNPConditions(np, "VersionResolutionNotReady", "Waiting for nodepool version resolution"))
+	require.Equal(t, &upgrade, meta.FindStatusCondition(np.Status.Conditions, "NodePoolUpgradeProgressing"))
+	require.True(t, meta.IsStatusConditionTrue(np.Status.Conditions, privatev1.NodePoolUpgradeProgressing))
+}
+
 // ---------------------------------------------------------------------------
 // Test cases – happy path and condition-driven requeue
 // ---------------------------------------------------------------------------
@@ -703,6 +738,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.NotNil(t, progressing)
 	require.Equal(t, metav1.ConditionFalse, progressing.Status)
 	require.Equal(t, "AsExpected", progressing.Reason)
+	require.Equal(t, "4.16.0", captured.Status.Version)
 }
 
 // TestReconcile_MWNotApplied_RequeuesPending verifies that when Applied=False the
@@ -1396,4 +1432,35 @@ func TestReconcile_Progressing_Priority_MachinesNotReadyWins(t *testing.T) {
 	require.NotNil(t, progressing)
 	require.Equal(t, metav1.ConditionTrue, progressing.Status)
 	require.Equal(t, "MachinesNotReady", progressing.Reason)
+}
+
+func TestReconcile_PendingReleaseUsesObservedImageAndAllowsScaling(t *testing.T) {
+	np := testNodePool("4.22.14")
+	np.Status.Version = "4.22.14"
+	np.Spec.Release.Version = "4.22.16"
+	np.Spec.Release.UpgradeStartTime = &metav1.Time{Time: time.Now().Add(time.Hour)}
+	replicas := int32(3)
+	np.Spec.NodeCount = &replicas
+	cluster := testCluster(true, true)
+	tr := mock.New()
+	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1)
+	require.Equal(t, replicas, replicasFromManifests(t, tr.ApplyCalls[0].Manifests))
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal(tr.ApplyCalls[0].Manifests[0], &obj))
+	require.Equal(t, np.Status.VersionResolution.ReleaseImage, obj["spec"].(map[string]any)["release"].(map[string]any)["image"])
+}
+
+func TestReconcile_UnapprovedTargetImageCannotBypassSchedule(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.Status.Version = "4.22.14"
+	np.Spec.Release.UpgradeStartTime = &metav1.Time{Time: time.Now().Add(time.Hour)}
+	cluster := testCluster(true, true)
+	tr := mock.New()
+	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "an already resolved image must not bypass coordinator approval")
 }

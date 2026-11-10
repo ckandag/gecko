@@ -201,6 +201,7 @@ func extractHCFields(raw []byte) (map[string]string, error) {
 }
 
 // extractNPFields extracts NodePool status fields from raw live-object JSON.
+//   - version:                     .status.version (last applied release)
 //   - readyCondition:              .status.conditions[type=Ready].status
 //   - allNodesHealthyCondition:    .status.conditions[type=AllNodesHealthy].status
 //   - allMachinesReadyCondition:   .status.conditions[type=AllMachinesReady].status
@@ -211,6 +212,7 @@ func extractNPFields(raw []byte) (map[string]string, error) {
 
 	var obj struct {
 		Status struct {
+			Version    string `json:"version"`
 			Conditions []struct {
 				Type   string `json:"type"`
 				Status string `json:"status"`
@@ -219,6 +221,9 @@ func extractNPFields(raw []byte) (map[string]string, error) {
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("unmarshal NodePool live object: %w", err)
+	}
+	if obj.Status.Version != "" {
+		fields["version"] = obj.Status.Version
 	}
 
 	for _, c := range obj.Status.Conditions {
